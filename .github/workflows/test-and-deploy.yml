@@ -1,0 +1,93 @@
+name: test-and-deploy
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cliproxyapi-production
+  cancel-in-progress: false
+
+env:
+  DEPLOY_HOST: 152.53.55.111
+  DEPLOY_USER: fkh
+  DEPLOY_PATH: /home/fkh/code/CLIProxyAPI
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run tests
+        run: go test ./...
+
+  deploy:
+    name: Deploy to production
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install deployment SSH key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          test -n "$DEPLOY_SSH_KEY"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/cliproxyapi_deploy"
+          chmod 600 "$HOME/.ssh/cliproxyapi_deploy"
+          ssh-keyscan -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+
+      - name: Update and restart server
+        run: |
+          ssh -i "$HOME/.ssh/cliproxyapi_deploy" \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+
+          repo="/home/fkh/code/CLIProxyAPI"
+          mkdir -p "$(dirname "$repo")"
+
+          if [ ! -d "$repo/.git" ]; then
+            git clone --branch main --single-branch https://github.com/kuhne12/CLIProxyAPI.git "$repo"
+          fi
+
+          git -C "$repo" fetch --prune origin main
+          git -C "$repo" reset --hard origin/main
+
+          test -f "$repo/config.yaml" || {
+            echo "Missing $repo/config.yaml; create the production config before deploying."
+            exit 1
+          }
+          mkdir -p "$repo/auths" "$repo/logs" "$repo/plugins"
+
+          cd "$repo"
+          docker compose config -q
+          docker compose build --pull cli-proxy-api
+          docker compose up -d --no-build --pull never --remove-orphans cli-proxy-api
+
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8317/healthz >/dev/null; then
+              echo "CLIProxyAPI is healthy."
+              exit 0
+            fi
+            sleep 2
+          done
+
+          docker compose logs --tail=100 cli-proxy-api
+          echo "CLIProxyAPI did not become healthy."
+          exit 1
+          REMOTE

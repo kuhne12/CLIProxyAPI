@@ -15,6 +15,7 @@ services:
     environment:
       DEPLOY: ${DEPLOY:-}
       CPA_RELAY_KEY: ${CPA_RELAY_KEY:-}
+      CPA_MINT_PROXY: ${CPA_MINT_PROXY:-}
     ports:
       - "8317:8317"
       - "8085:8085"

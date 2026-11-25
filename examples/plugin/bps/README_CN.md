@@ -148,6 +148,12 @@ curl -X POST -H 'Authorization: Bearer YOUR_MANAGEMENT_KEY' \
   'http://127.0.0.1:8317/v8/management/credentials/verify'
 ```
 
+### 响应格式兼容修复（0.5.2）
+
+配套 CPA 同时兼容单行和带缩进的多行 WebSocket JSON。正文中的换行保持不变，
+上游模型无权限、额度不足等错误可正常分类，不再被误报为不支持的响应或工具调用。
+此修复需要同时升级 CPA；模型出现在可选目录中不代表当前账号拥有调用权限。
+
 ## 查询额度与余额
 
 从插件 **0.4.0** 起，BPS 认证文件会显示 CPA 已有的额度查询入口。查询使用与 Codex

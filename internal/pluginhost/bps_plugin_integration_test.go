@@ -36,7 +36,7 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 		t.Fatalf("build BPS plugin: %v\n%s", errBuild, output)
 	}
 	host := New()
-	client, errOpen := (dynamicLibraryLoader{}).Open(pluginFile{ID: "bps", Path: pluginPath, Version: "0.5.1"}, host)
+	client, errOpen := (dynamicLibraryLoader{}).Open(pluginFile{ID: "bps", Path: pluginPath, Version: "0.5.2"}, host)
 	if errOpen != nil {
 		t.Fatal(errOpen)
 	}
@@ -46,7 +46,7 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 		t.Fatal(errRegister)
 	}
 	fields := plugin.Metadata.ConfigFields
-	if plugin.Metadata.Version != "0.5.1" || len(fields) != 2 || fields[0].Name != "cache-creation-as-input" || fields[0].Type != pluginapi.ConfigFieldTypeBoolean || fields[0].Default != false || fields[1].Name != "quota-model-prices" || fields[1].Type != pluginapi.ConfigFieldTypeObject {
+	if plugin.Metadata.Version != "0.5.2" || len(fields) != 2 || fields[0].Name != "cache-creation-as-input" || fields[0].Type != pluginapi.ConfigFieldTypeBoolean || fields[0].Default != false || fields[1].Name != "quota-model-prices" || fields[1].Type != pluginapi.ConfigFieldTypeObject {
 		t.Fatal("BPS downstream accounting configuration unavailable across C ABI")
 	}
 	if plugin.Capabilities.AuthProvider == nil || plugin.Capabilities.AuthProvider.Identifier() != "bps" || plugin.Capabilities.CommandLinePlugin == nil {

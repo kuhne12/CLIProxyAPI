@@ -166,6 +166,13 @@ requests and 64 queued requests per account. It never automatically replays a
 sent generation. Product context injected by the upstream can contribute roughly
 22k input tokens even for a short prompt; reported usage includes those tokens.
 
+### WebSocket response framing (0.5.2)
+
+The matching CPA build accepts compact and pretty-printed WebSocket JSON frames.
+It preserves text newlines and reports upstream model-access or quota errors
+instead of masking them as unsupported response/tool errors. Upgrade CPA with
+the plugin; the available model catalog does not guarantee account access.
+
 ## Account quota (0.4.0)
 
 The plugin registers CPA's quota capability, so BPS authorization files expose

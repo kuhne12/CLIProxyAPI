@@ -63,7 +63,7 @@ print(matches[0])
 PY
 )
 architecture=$(docker image inspect "$image" --format '{{.Architecture}}')
-plugin="$plugin_dir/linux/$architecture/bps-v0.5.1.so"
+plugin="$plugin_dir/linux/$architecture/bps-v0.5.2.so"
 mkdir -p "$(dirname "$plugin")"
 if test -f "$plugin"; then cp -p "$plugin" "$backup/previous-bps.so"; fi
 

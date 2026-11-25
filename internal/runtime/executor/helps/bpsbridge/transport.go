@@ -139,7 +139,13 @@ func (b *socketBody) Read(p []byte) (int, error) {
 		}
 		_ = doc.Delete("basispoints_replay_cursor")
 		b.terminal = event == "response.completed" || event == "response.incomplete" || event == "response.failed" || event == "error"
-		b.pending.Reset([]byte("event: " + event + "\ndata: " + doc.String() + "\n\n"))
+		// WebSocket JSON may be pretty-printed. Each SSE data field must stay on
+		// one physical line, while escaped newlines inside strings remain intact.
+		var compact bytes.Buffer
+		if errCompact := json.Compact(&compact, doc.Bytes()); errCompact != nil {
+			return 0, protocolFailure()
+		}
+		b.pending.Reset([]byte("event: " + event + "\ndata: " + compact.String() + "\n\n"))
 	}
 	return b.pending.Read(p)
 }

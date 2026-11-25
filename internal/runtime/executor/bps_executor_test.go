@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/json"
 	"github.com/MoeForge/moego/ojson"
 	"github.com/coder/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -102,6 +104,87 @@ func TestBPSExecutorChatAndResponses(t *testing.T) {
 				t.Fatalf("incorrect response: %s", response.Payload)
 			}
 		})
+	}
+}
+
+func TestBPSExecutorPrettyPrintedWebSocketFrames(t *testing.T) {
+	answer := "BPS_OK\n第二行"
+	doc := ojson.NewDocString(bpsCompletedFixture)
+	if err := doc.Set("response.output.0.content.0.text", answer); err != nil {
+		t.Fatal(err)
+	}
+	if err := doc.Set("basispoints_replay_cursor", "private-cursor"); err != nil {
+		t.Fatal(err)
+	}
+	delta := ojson.NewDocString(`{"type":"response.output_text.delta","item_id":"msg_bps","output_index":0,"content_index":0}`)
+	if err := delta.Set("delta", answer); err != nil {
+		t.Fatal(err)
+	}
+	for _, newline := range []string{"\n", "\r\n"} {
+		for _, stream := range []bool{false, true} {
+			for _, format := range []sdktranslator.Format{sdktranslator.FormatOpenAI, sdktranslator.FormatOpenAIResponse} {
+				t.Run(fmt.Sprintf("%s/stream=%t/newline=%q", format, stream, newline), func(t *testing.T) {
+					var events []string
+					for _, raw := range [][]byte{delta.Bytes(), doc.Bytes()} {
+						var pretty bytes.Buffer
+						if err := json.Indent(&pretty, raw, "", "  "); err != nil {
+							t.Fatal(err)
+						}
+						events = append(events, strings.ReplaceAll(pretty.String(), "\n", newline))
+					}
+					e, count := newBPSFixture(t, events, nil)
+					req, opts := bpsFixtureRequest(format)
+					if stream {
+						response, err := e.ExecuteStream(t.Context(), bpsFixtureAuth(), req, opts)
+						if err != nil {
+							t.Fatal(err)
+						}
+						var all bytes.Buffer
+						for chunk := range response.Chunks {
+							if chunk.Err != nil {
+								t.Fatal(chunk.Err)
+							}
+							all.Write(chunk.Payload)
+						}
+						if !strings.Contains(all.String(), "BPS_OK\\n第二行") || strings.Contains(all.String(), "private-cursor") {
+							t.Fatalf("incorrect streamed content: %s", all.String())
+						}
+					} else {
+						response, err := e.Execute(t.Context(), bpsFixtureAuth(), req, opts)
+						if err != nil {
+							t.Fatal(err)
+						}
+						field := "output.0.content.0.text"
+						if format == sdktranslator.FormatOpenAI {
+							field = "choices.0.message.content"
+						}
+						if ojson.GetBytes(response.Payload, field).String() != answer || bytes.Contains(response.Payload, []byte("private-cursor")) {
+							t.Fatalf("incorrect content: %s", response.Payload)
+						}
+					}
+					if count.Load() != 1 {
+						t.Fatal("request was replayed")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestBPSExecutorPrettyPrintedUpstreamError(t *testing.T) {
+	var pretty bytes.Buffer
+	if err := json.Indent(&pretty, []byte(`{"type":"error","error":{"code":"usage_limit_reached","message":"echo fixture-token"}}`), "", "  "); err != nil {
+		t.Fatal(err)
+	}
+	e, count := newBPSFixture(t, []string{pretty.String()}, nil)
+	req, opts := bpsFixtureRequest(sdktranslator.FormatOpenAIResponse)
+	_, err := e.Execute(t.Context(), bpsFixtureAuth(), req, opts)
+	var failure *pluginabi.Error
+	if !errors.As(err, &failure) || failure.HTTPStatus != 429 || failure.Code != pluginabi.ErrorCodeCredentialQuota || strings.Contains(failure.Message, "fixture-token") {
+		t.Fatalf("upstream error was not classified safely: %v", err)
+	}
+	if count.Load() != 1 {
+		t.Fatal("failed request was replayed")
 	}
 }
 

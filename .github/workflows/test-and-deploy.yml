@@ -33,7 +33,14 @@ jobs:
           cache: true
 
       - name: Run tests
-        run: go test ./...
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          go test ./...
+          go test -race ./examples/plugin/bps/go/...
+          go build -o test-output ./cmd/server
+          rm test-output
+          bash -n .github/scripts/deploy-production.sh
 
   deploy:
     name: Deploy to production
@@ -50,44 +57,16 @@ jobs:
           chmod 600 "$HOME/.ssh/cliproxyapi_deploy"
           ssh-keyscan -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
 
+      - name: Checkout deployment script
+        uses: actions/checkout@v4
+
       - name: Update and restart server
+        env:
+          DEPLOY_COMMIT: ${{ github.sha }}
         run: |
           ssh -i "$HOME/.ssh/cliproxyapi_deploy" \
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
-            "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' <<'REMOTE'
-          set -euo pipefail
-
-          repo="/home/fkh/code/CLIProxyAPI"
-          mkdir -p "$(dirname "$repo")"
-
-          if [ ! -d "$repo/.git" ]; then
-            git clone --branch main --single-branch https://github.com/kuhne12/CLIProxyAPI.git "$repo"
-          fi
-
-          git -C "$repo" fetch --prune origin main
-          git -C "$repo" reset --hard origin/main
-
-          test -f "$repo/config.yaml" || {
-            echo "Missing $repo/config.yaml; create the production config before deploying."
-            exit 1
-          }
-          mkdir -p "$repo/auths" "$repo/logs" "$repo/plugins"
-
-          cd "$repo"
-          docker compose config -q
-          docker compose build --pull cli-proxy-api
-          docker compose up -d --no-build --pull never --remove-orphans cli-proxy-api
-
-          for attempt in $(seq 1 30); do
-            if curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8317/healthz >/dev/null; then
-              echo "CLIProxyAPI is healthy."
-              exit 0
-            fi
-            sleep 2
-          done
-
-          docker compose logs --tail=100 cli-proxy-api
-          echo "CLIProxyAPI did not become healthy."
-          exit 1
-          REMOTE
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "bash -s -- '$DEPLOY_PATH' '$DEPLOY_COMMIT'" \
+            < .github/scripts/deploy-production.sh

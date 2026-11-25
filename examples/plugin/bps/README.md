@@ -1,0 +1,150 @@
+# BPS authorization plugin
+
+[简体中文](README_CN.md)
+
+This Go C ABI plugin adds independent BPS device authorization to CPA. It adapts
+the OAuth implementation from [bps-local-public](https://github.com/sunboyzoey/bps-local-public)
+and reuses CPA's plugin loader, command-line flags, credential store, proxy
+configuration, v8 management sessions, and manual credential refresh.
+
+## Build and configure
+
+Run from the **CPA repository root** with Go 1.26+ and a C compiler. This plugin
+uses CPA's root Go module. Both the server and plugin need CGO and must target
+the same OS and CPU architecture.
+
+```sh
+mkdir -p bin plugins
+CGO_ENABLED=1 go build -o bin/cli-proxy-api ./cmd/server
+CGO_ENABLED=1 go build -buildmode=c-shared -o plugins/bps.dylib ./examples/plugin/bps/go
+```
+
+Use `bps.so` on Linux/FreeBSD and `bps.dll` on Windows. On Apple Silicon, prefix
+**both** commands with `GOARCH=arm64` if your Go environment targets `amd64`.
+The generated C header is not needed at runtime. Keep the basename `bps` so it
+matches the plugin configuration key.
+
+Merge this into your v8 configuration (adjust paths):
+
+```yaml
+config-version: 8
+oauth:
+  auth-dir: "./auths"
+plugins:
+  enabled: true
+  dir: "./plugins"
+  configs:
+    bps:
+      enabled: true
+```
+
+OAuth requests honor CPA's global `requests.proxy-url`; refresh also honors the
+credential's `proxy_url` override. `direct`, HTTP(S), and SOCKS proxies use CPA's
+existing transport helper. No OAuth response bodies or tokens are logged.
+
+## Command line
+
+```sh
+./bin/cli-proxy-api --config config.yaml --bps-login --no-browser
+./bin/cli-proxy-api --config config.yaml --bps-import /absolute/path/oauth.json
+```
+
+Login immediately prints a URL and device code. Open the URL, enter the code,
+and approve authorization. Omitting `--no-browser` also opens the URL using the
+system browser. The command waits up to 15 minutes; Ctrl+C cancels it. This is
+device authorization, not the separate browser callback flow.
+
+Import reads an existing BPS OAuth JSON file without modifying the source. It
+requires the BPS `client_id` (`app_fnr0pYvVwwFDocDumLG3H2Bp`) and rejects Codex
+credentials. Original flat bps-local files are supported, as are nested `tokens`
+files with an explicit BPS client ID. Account identity and absolute expiry must
+be recoverable from the file or token claims. Claims are used for bookkeeping,
+not as proof of upstream authorization.
+
+CPA saves the result as `type: bps`, using a stable `bps-<identity-hash>.json`
+filename. With the file store, new files have mode `0600`. Re-importing the same
+identity updates its destination; `prefix`, `proxy_url`, `disabled`, and other
+credential settings are preserved. The command prints the saved destination.
+
+## v8 management API
+
+Set `management.secret-key` to enable management routes. The examples below use
+the existing management bearer key, not a proxy client API key:
+
+```sh
+curl -H 'Authorization: Bearer YOUR_MANAGEMENT_KEY' \
+  'http://127.0.0.1:8317/v8/management/oauth/auth-url?provider=bps&method=device'
+```
+
+The response contains `status`, `url`, `state`, `user_code`, `interval` (seconds),
+and `expires_at`. Display only the URL/code and keep polling with the returned
+state, no more frequently than the interval:
+
+```sh
+curl -H 'Authorization: Bearer YOUR_MANAGEMENT_KEY' \
+  'http://127.0.0.1:8317/v8/management/oauth/status?state=RETURNED_STATE'
+```
+
+`wait` means pending, `ok` means credentials have been saved, and `error` means
+the login must be restarted. Polling drives the device flow; no poller runs in
+the background. The plugin enforces polling intervals, including upstream
+`slow_down`, and caches successful exchanges. Concurrent polls save only once.
+Private device IDs, PKCE material, and tokens are never part of these responses.
+
+Cancel a pending login:
+
+```sh
+curl -X DELETE -H 'Authorization: Bearer YOUR_MANAGEMENT_KEY' \
+  'http://127.0.0.1:8317/v8/management/oauth/session?state=RETURNED_STATE'
+```
+
+`cancelled: true` prevents a later in-flight result from being saved. Once a
+successful result has claimed the save, cancellation returns false and the save
+finishes even if the polling client disconnects. Restarting or unloading the
+plugin invalidates pending device sessions.
+
+List saved credentials and manually refresh one using its returned filename:
+
+```sh
+curl -H 'Authorization: Bearer YOUR_MANAGEMENT_KEY' \
+  'http://127.0.0.1:8317/v8/management/credentials'
+curl -X POST -H 'Authorization: Bearer YOUR_MANAGEMENT_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"bps-IDENTITY_HASH.json"}' \
+  'http://127.0.0.1:8317/v8/management/credentials/refresh'
+```
+
+Refresh preserves account identity, settings, and the existing filename. It
+saves rotated credentials through CPA. A token exchange is never automatically
+retried: a failed response can leave rotation outcome unknown. Definitive
+`invalid_grant` requires a new login. Only one process should manage refresh for
+a grant; sharing the same grant across independent processes adds no rotation
+coordination.
+
+## Scope and compatibility
+
+- This release provides authorization, import, persistence, and manual refresh.
+  It registers no models or BPS inference executor and schedules no automatic
+  refresh. A successful login does not establish model-generation permission.
+- A saved flat credential can be supplied to the existing `bps-local --auth`
+  option. Keep using the separately configured local bridge / CPA Codex channel
+  for inference. Do not relabel BPS credentials as Codex OAuth credentials.
+- Use the CPA build from this change for v8 device-code response fields. The
+  existing management frontend has not been extended with a BPS login button;
+  the CLI and documented API are available.
+- Dedicated browser callback authorization, automatic refresh, and a native BPS
+  inference executor are outside this release.
+
+## Verification and attribution
+
+```sh
+CGO_ENABLED=1 go test -race ./examples/plugin/bps/go/...
+CGO_ENABLED=1 go test ./internal/pluginhost -run '^TestBPSSharedLibraryImportsAndPersistsIndependentGrant$' -v
+```
+
+Tests use local OAuth fixtures and synthetic credentials, including device
+pending/approval/denial, PKCE, expiration, concurrency, refresh rotation, import,
+and actual shared-library loading and persistence. Live account authorization
+and generation permission require a separate account test.
+
+See [NOTICE](NOTICE) and [LICENSE.upstream](LICENSE.upstream) for source attribution.

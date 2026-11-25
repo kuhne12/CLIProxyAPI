@@ -20,6 +20,14 @@ auths
 logs
 conv
 config.yaml
+.env
+plugins
+turn-state-store
+temp
+refs
+examples/plugin/bin
+.cpa-*-backups
+docker-compose.override.yml
 
 # Development/editor
 bin

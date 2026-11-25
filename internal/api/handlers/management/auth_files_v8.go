@@ -420,7 +420,7 @@ func (h *Handler) StartOAuthV8(c *gin.Context) {
 	case "meta":
 		h.RequestMetaToken(c)
 	default:
-		if !h.ServePluginAuthURL(c) {
+		if !h.servePluginAuthURLV8(c) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "provider_not_found"})
 		}
 	}

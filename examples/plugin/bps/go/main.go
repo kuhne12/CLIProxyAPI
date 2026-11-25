@@ -1,0 +1,196 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"os/signal"
+	"runtime"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"github.com/MoeForge/moego/json"
+	"github.com/router-for-me/CLIProxyAPI/v8/examples/plugin/bps/go/internal/bpsauth"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
+	log "github.com/sirupsen/logrus"
+)
+
+var provider atomic.Pointer[bpsauth.Provider]
+
+func init() { resetProvider() }
+
+func resetProvider() {
+	if previous := provider.Swap(bpsauth.New()); previous != nil {
+		previous.Close()
+	}
+}
+
+func main() {}
+
+func handleMethod(method string, raw []byte) ([]byte, error) {
+	ctx := context.Background()
+	authProvider := provider.Load()
+	switch method {
+	case pluginabi.MethodPluginRegister, pluginabi.MethodPluginReconfigure:
+		// Registration also reactivates a quiesced instance after a failed
+		// replacement. Ordinary configuration updates preserve pending logins.
+		if method == pluginabi.MethodPluginRegister {
+			resetProvider()
+		}
+		return okEnvelope(map[string]any{
+			"schema_version": pluginabi.SchemaVersion,
+			"metadata": pluginapi.Metadata{Name: "bps", Version: "0.1.0", Author: "CLIProxyAPI contributors",
+				GitHubRepository: "https://github.com/router-for-me/CLIProxyAPI", ConfigFields: []pluginapi.ConfigField{}},
+			"capabilities": map[string]bool{"auth_provider": true, "command_line_plugin": true},
+		})
+	case pluginabi.MethodPluginQuiesce, pluginabi.MethodPluginShutdown:
+		authProvider.Close()
+		return okEnvelope(struct{}{})
+	case pluginabi.MethodAuthIdentifier:
+		return okEnvelope(map[string]string{"identifier": "bps"})
+	case pluginabi.MethodAuthLoginStart:
+		return dispatch(raw, func(req pluginapi.AuthLoginStartRequest) (pluginapi.AuthLoginStartResponse, error) {
+			return authProvider.StartLogin(ctx, req)
+		})
+	case pluginabi.MethodAuthLoginPoll:
+		return dispatch(raw, func(req pluginapi.AuthLoginPollRequest) (pluginapi.AuthLoginPollResponse, error) {
+			return authProvider.PollLogin(ctx, req)
+		})
+	case pluginabi.MethodAuthParse:
+		return dispatch(raw, func(req pluginapi.AuthParseRequest) (pluginapi.AuthParseResponse, error) {
+			return authProvider.ParseAuth(ctx, req)
+		})
+	case pluginabi.MethodAuthRefresh:
+		return dispatch(raw, func(req pluginapi.AuthRefreshRequest) (pluginapi.AuthRefreshResponse, error) {
+			return authProvider.RefreshAuth(ctx, req)
+		})
+	case pluginabi.MethodCommandLineRegister:
+		return okEnvelope(pluginapi.CommandLineRegistrationResponse{Flags: []pluginapi.CommandLineFlag{
+			{Name: "bps-login", Type: "bool", Usage: "Log in to BPS using an independent device authorization"},
+			{Name: "bps-import", Type: "string", Usage: "Import an independent BPS OAuth JSON file"},
+		}})
+	case pluginabi.MethodCommandLineExecute:
+		return dispatch(raw, func(req pluginapi.CommandLineExecutionRequest) (pluginapi.CommandLineExecutionResponse, error) {
+			ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
+			defer stop()
+			return runCommand(ctx, authProvider, req, os.Stdout)
+		})
+	default:
+		return errorEnvelope("unknown_method", "unknown plugin method"), nil
+	}
+}
+
+func dispatch[Request, Response any](raw []byte, invoke func(Request) (Response, error)) ([]byte, error) {
+	var req Request
+	if json.Unmarshal(raw, &req) != nil {
+		return nil, errors.New("invalid plugin request JSON")
+	}
+	response, err := invoke(req)
+	if err != nil {
+		return nil, err
+	}
+	return okEnvelope(response)
+}
+
+func okEnvelope(value any) ([]byte, error) {
+	raw, errMarshal := json.Marshal(value)
+	if errMarshal != nil {
+		return nil, errors.New("cannot encode plugin response")
+	}
+	return json.Marshal(pluginabi.Envelope{OK: true, Result: raw})
+}
+
+func errorEnvelope(code, message string) []byte {
+	status := http.StatusBadRequest
+	if strings.Contains(message, "invalid_grant") {
+		status = http.StatusUnauthorized
+	}
+	raw, _ := pluginabi.NewErrorEnvelope(code, message, status)
+	return raw
+}
+
+func runCommand(ctx context.Context, auth *bpsauth.Provider, req pluginapi.CommandLineExecutionRequest, output io.Writer) (pluginapi.CommandLineExecutionResponse, error) {
+	login := req.Flags["bps-login"].Value == "true"
+	path := strings.TrimSpace(req.Flags["bps-import"].Value)
+	if login == (path != "") {
+		return pluginapi.CommandLineExecutionResponse{}, errors.New("choose exactly one of --bps-login or --bps-import")
+	}
+	var record pluginapi.AuthData
+	if path != "" {
+		file, errOpen := os.Open(path)
+		if errOpen != nil {
+			return pluginapi.CommandLineExecutionResponse{}, errors.New("cannot open BPS OAuth file")
+		}
+		defer func() {
+			if errClose := file.Close(); errClose != nil {
+				log.Warn("BPS import file close failed")
+			}
+		}()
+		raw, errRead := io.ReadAll(io.LimitReader(file, (2<<20)+1))
+		if errRead != nil {
+			return pluginapi.CommandLineExecutionResponse{}, errors.New("cannot read BPS OAuth file")
+		}
+		parsed, errParse := auth.ParseAuth(ctx, pluginapi.AuthParseRequest{Provider: "bps", RawJSON: raw})
+		if errParse != nil {
+			return pluginapi.CommandLineExecutionResponse{}, errParse
+		}
+		if !parsed.Handled {
+			return pluginapi.CommandLineExecutionResponse{}, errors.New("file is not an independent BPS OAuth grant")
+		}
+		record = parsed.Auth
+	} else {
+		start, errStart := auth.StartLogin(ctx, pluginapi.AuthLoginStartRequest{Provider: "bps", Host: req.Host})
+		if errStart != nil {
+			return pluginapi.CommandLineExecutionResponse{}, errStart
+		}
+		// CommandLineExecutionResponse.Stdout is delayed until completion, so the
+		// device prompt must be written now while the user can still authorize.
+		if _, errWrite := fmt.Fprintf(output, "Open: %s\nDevice code: %s\nComplete BPS authorization in your browser. Waiting up to 15 minutes...\n", start.URL, start.UserCode); errWrite != nil {
+			return pluginapi.CommandLineExecutionResponse{}, errWrite
+		}
+		if req.Flags["no-browser"].Value != "true" {
+			if errOpen := openBrowser(ctx, start.URL); errOpen != nil {
+				_, _ = fmt.Fprintln(output, "Open the URL above manually; the browser could not be opened.")
+			}
+		}
+		ctx, cancel := context.WithDeadline(ctx, start.ExpiresAt)
+		defer cancel()
+		ticker := time.NewTicker(time.Duration(start.Interval) * time.Second)
+		defer ticker.Stop()
+		for record.Provider == "" {
+			select {
+			case <-ctx.Done():
+				return pluginapi.CommandLineExecutionResponse{}, ctx.Err()
+			case <-ticker.C:
+			}
+			polled, errPoll := auth.PollLogin(ctx, pluginapi.AuthLoginPollRequest{Provider: "bps", State: start.State, Host: req.Host})
+			if errPoll != nil {
+				return pluginapi.CommandLineExecutionResponse{}, errPoll
+			}
+			if polled.Status == pluginapi.AuthLoginStatusSuccess {
+				record = polled.Auth
+			}
+		}
+	}
+	return pluginapi.CommandLineExecutionResponse{Auths: []pluginapi.AuthData{record},
+		Stdout: []byte("BPS OAuth grant acquired. Generation permission is not yet verified.\n")}, nil
+}
+
+func openBrowser(ctx context.Context, address string) error {
+	var command *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		command = exec.CommandContext(ctx, "open", address)
+	case "windows":
+		command = exec.CommandContext(ctx, "rundll32", "url.dll,FileProtocolHandler", address)
+	default:
+		command = exec.CommandContext(ctx, "xdg-open", address)
+	}
+	return command.Run()
+}

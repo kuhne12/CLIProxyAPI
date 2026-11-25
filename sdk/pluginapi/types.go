@@ -375,6 +375,10 @@ type AuthLoginStartResponse struct {
 	State string
 	// ExpiresAt is the time when this login flow expires.
 	ExpiresAt time.Time
+	// UserCode is the public code displayed during device authorization.
+	UserCode string `json:",omitempty"`
+	// Interval is the minimum device polling interval, in seconds.
+	Interval int `json:",omitempty"`
 	// Metadata carries plugin-defined polling context.
 	Metadata map[string]any
 }

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"net/http"
 	"path/filepath"
 	"time"
 
@@ -14,6 +15,8 @@ import (
 )
 
 type serverOptionConfig struct {
+	bpsImageRelay         http.Handler
+	pluginInterceptorHost handlers.PluginInterceptorHost
 	extraMiddleware       []gin.HandlerFunc
 	engineConfigurator    func(*gin.Engine)
 	routerConfigurator    func(*gin.Engine, *handlers.BaseAPIHandler, *config.Config)
@@ -31,6 +34,11 @@ type serverOptionConfig struct {
 
 // ServerOption customises HTTP server construction.
 type ServerOption func(*serverOptionConfig)
+
+// WithBPSImageRelayHandler exposes only temporary signed image downloads.
+func WithBPSImageRelayHandler(handler http.Handler) ServerOption {
+	return func(cfg *serverOptionConfig) { cfg.bpsImageRelay = handler }
+}
 
 func defaultRequestLoggerFactory(cfg *config.Config, configPath string) logging.RequestLogger {
 	configDir := filepath.Dir(configPath)
@@ -111,6 +119,17 @@ func WithPostAuthHook(hook auth.PostAuthHook) ServerOption {
 func WithPostAuthPersistHook(hook auth.PostAuthHook) ServerOption {
 	return func(cfg *serverOptionConfig) {
 		cfg.postAuthPersistHook = hook
+	}
+}
+
+// WithPluginInterceptorHost installs a caller-provided plugin interceptor host
+// on request handlers. When set, the server forwards interceptor calls to this
+// host while keeping model routing, lifecycle callbacks, and websocket observer
+// dispatch delegated to the internal plugin host so plugin features stay
+// functional across startup and config reloads.
+func WithPluginInterceptorHost(host handlers.PluginInterceptorHost) ServerOption {
+	return func(cfg *serverOptionConfig) {
+		cfg.pluginInterceptorHost = host
 	}
 }
 

@@ -7,6 +7,7 @@ This directory contains standard dynamic library plugin examples for the CLIProx
 - `simple/`: full provider-native skeleton that declares every supported capability.
 - `model/`: model capability only.
 - `auth/`: auth provider capability only.
+- `bps/`: Go BPS device login, credential import, and manual refresh using CPA's auth provider and command-line capabilities. See [BPS authorization](bps/README.md).
 - `frontend-auth/`: frontend auth provider capability only.
 - `frontend-auth-exclusive/`: frontend auth provider that becomes the only request authentication provider when selected.
 - `executor/`: executor capability only.
@@ -171,6 +172,11 @@ make -C examples/plugin build
 ```
 
 Artifacts are written to `examples/plugin/bin`.
+
+When building prebuilt `c-shared` plugin release artifacts on CI runners for distribution across diverse machines, pin the baseline CPU instruction set so compiler-emitted instructions (such as AVX/AVX2/AVX-512 on modern `ubuntu-latest` runners) do not trigger `SIGILL` on older CPUs or virtualized hosts:
+
+- `amd64`: `GOAMD64=v1 CGO_CFLAGS="-march=x86-64"`
+- `arm64`: `GOARM64=v8.0 CGO_CFLAGS="-march=armv8-a"`
 
 ## Notes
 

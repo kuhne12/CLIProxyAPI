@@ -1,0 +1,28 @@
+BPS authorization and model plugin for CLIProxyAPI
+
+OAuth code adapted from:
+  https://github.com/sunboyzoey/bps-local-public
+  Commit: 203c716ccd1cad0452b5dc7535c46e6531e73af0
+  Source files: internal/auth/device.go, internal/auth/renew.go,
+                internal/auth/auth.go
+
+Browser authorization parameters and callback validation adapted from:
+  Commit: c66fb41006baf7ede70af69a3e2f81af6a6c246b
+  Source file: internal/auth/browser.go
+  Browser interception/automation is not included. Users submit callback URLs
+  through CPA's existing callback endpoint or paste them into the CLI.
+
+The upstream LICENSE is reproduced unchanged as LICENSE.upstream. It contains
+the baseline Unlicense and collected component-specific notices. The native CPA executor reuses the upstream internal/basispoints adapter at
+commit c66fb41006baf7ede70af69a3e2f81af6a6c246b. Its source attribution and
+license are also recorded in internal/runtime/executor/helps/bpsbridge/.
+
+Changes made for this integration:
+  - Split blocking device login into CPA start/poll sessions.
+  - Reuse CPA proxy configuration and credential persistence.
+  - Add bounded sessions, concurrency control, polling backoff, and cancellation.
+  - Normalize independent BPS credentials and preserve CPA account settings.
+  - Sanitize OAuth errors and support manual refresh without exchange retries.
+  - Expose C ABI auth/CLI capabilities with local fixture and host integration tests.
+
+The C ABI entrypoint follows the existing CLIProxyAPI Go plugin examples.

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 	log "github.com/sirupsen/logrus"
 )
@@ -382,7 +383,7 @@ func (h *Host) persistCommandLineAuths(ctx context.Context, auths []pluginapi.Au
 		if record == nil {
 			return savedPaths, fmt.Errorf("pluginhost: command-line auth %d is invalid", index+1)
 		}
-		savedPath, errSave := store.Save(ctx, record)
+		savedPath, errSave := store.Save(coreauth.WithAuthCreationIntent(ctx), record)
 		if errSave != nil {
 			return savedPaths, fmt.Errorf("pluginhost: save command-line auth %s: %w", record.ID, errSave)
 		}

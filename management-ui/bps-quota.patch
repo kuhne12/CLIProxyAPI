@@ -1,0 +1,924 @@
+diff --git a/src/features/quota/providers/plugin/BpsQuotaBody.module.scss b/src/features/quota/providers/plugin/BpsQuotaBody.module.scss
+new file mode 100644
+index 0000000..d291864
+--- /dev/null
++++ b/src/features/quota/providers/plugin/BpsQuotaBody.module.scss
+@@ -0,0 +1,119 @@
++.body {
++  display: flex;
++  flex-direction: column;
++  gap: 10px;
++  min-width: 0;
++}
++
++.group {
++  display: flex;
++  flex-direction: column;
++  gap: 9px;
++}
++
++.heading {
++  display: flex;
++  align-items: center;
++  color: var(--text-tertiary);
++  font-size: 11px;
++  font-weight: 600;
++}
++
++.window {
++  min-width: 0;
++}
++
++.estimates {
++  display: flex;
++  flex-wrap: wrap;
++  gap: 4px 6px;
++  margin-bottom: 5px;
++}
++
++.stat {
++  padding: 2px 5px;
++  border-radius: $radius-sm;
++  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
++  color: var(--text-tertiary);
++  font-size: 10px;
++  line-height: 1.5;
++
++  strong {
++    margin-left: 3px;
++    font-family: $font-mono;
++    font-variant-numeric: tabular-nums;
++    color: var(--text-secondary);
++    font-weight: 550;
++  }
++}
++
++.pending {
++  color: var(--text-tertiary);
++  font-size: 10px;
++  margin-bottom: 5px;
++}
++
++.row {
++  display: flex;
++  align-items: center;
++  flex-wrap: wrap;
++  gap: 5px 7px;
++  min-width: 0;
++  font-size: 11px;
++  font-variant-numeric: tabular-nums;
++}
++
++.badge {
++  min-width: 30px;
++  max-width: 100px;
++  padding: 2px 5px;
++  border-radius: $radius-sm;
++  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
++  color: var(--text-secondary);
++  font-family: $font-mono;
++  font-weight: 600;
++  text-align: center;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++
++.track {
++  width: 60px;
++  height: 6px;
++  flex-shrink: 0;
++  overflow: hidden;
++  border-radius: $radius-full;
++  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
++}
++
++.fill {
++  height: 100%;
++  background: currentColor;
++  border-radius: inherit;
++  transition: width 300ms var(--ease-out-strong, ease);
++}
++
++.percent {
++  white-space: nowrap;
++}
++.healthy {
++  color: var(--viz-success);
++}
++.warning {
++  color: var(--quota-medium-color);
++}
++.danger {
++  color: var(--viz-failure);
++}
++.reset {
++  color: var(--text-tertiary);
++  white-space: nowrap;
++  font-size: 10px;
++}
++
++@media (prefers-reduced-motion: reduce) {
++  .fill {
++    transition: none;
++  }
++}
+diff --git a/src/features/quota/providers/plugin/BpsQuotaBody.tsx b/src/features/quota/providers/plugin/BpsQuotaBody.tsx
+new file mode 100644
+index 0000000..0ea3656
+--- /dev/null
++++ b/src/features/quota/providers/plugin/BpsQuotaBody.tsx
+@@ -0,0 +1,171 @@
++import { useTranslation } from 'react-i18next';
++import { InfoTip } from '@/components/ui/Tooltip';
++import { useNow } from '@/hooks/useNow';
++import { buildResetDisplay } from '@/utils/quota';
++import type { PluginQuotaState } from '@/types';
++import type { QuotaBodyProps } from '../../types';
++import { isBpsEstimateMetric } from './bpsQuota';
++import styles from './BpsQuotaBody.module.scss';
++
++export function BpsQuotaBody({ quota, classes }: QuotaBodyProps<PluginQuotaState>) {
++  const { t, i18n } = useTranslation();
++  const hasReset = quota.groups.some((group) => group.buckets.some((bucket) => bucket.resetTime));
++  const now = useNow(hasReset) + (quota.serverTimeOffsetMs ?? 0);
++  const plan =
++    quota.subscription?.tierName || quota.subscription?.plan || quota.subscription?.tierId;
++  const resetCredits = quota.summary.find(
++    (metric) => metric.key === 'rate_limit_reset_credits_available_count'
++  );
++  const resetCount =
++    resetCredits && Number.isSafeInteger(resetCredits.value) && resetCredits.value >= 0
++      ? resetCredits.value
++      : null;
++  const summary = quota.summary.filter(
++    (metric) =>
++      !isBpsEstimateMetric(metric) && metric.key !== 'rate_limit_reset_credits_available_count'
++  );
++  const windowLabel = (window: string) => {
++    const match = /^(\d+)([dhms])$/.exec(window);
++    const keys: Record<string, string> = {
++      d: 'bps_days',
++      h: 'bps_hours',
++      m: 'bps_minutes',
++      s: 'bps_seconds',
++    };
++    return match ? t('plugin_quota.' + keys[match[2]], { count: Number(match[1]) }) : window;
++  };
++  const money = new Intl.NumberFormat(i18n.resolvedLanguage, {
++    style: 'currency',
++    currency: 'USD',
++    currencyDisplay: 'narrowSymbol',
++  });
++
++  return (
++    <div className={styles.body} data-bps-quota-layout="compact-v1">
++      {
++        <div className={classes.codexPlan}>
++          {plan && (
++            <span className={classes.codexPlanItem} data-quota-plan="">
++              <span className={classes.codexPlanLabel}>{t('plugin_quota.plan_label')}</span>
++              <span className={classes.codexPlanValue}>{plan}</span>
++            </span>
++          )}
++          <span className={classes.codexPlanItem} data-bps-reset-count="">
++            <span className={classes.codexPlanLabel}>{t('codex_quota.reset_credits_label')}</span>
++            <span className={classes.codexPlanValue}>
++              {resetCount === null ? t('plugin_quota.bps_unknown') : resetCount}
++            </span>
++          </span>
++          {summary.map((metric) => (
++            <span key={metric.key} className={classes.codexPlanItem}>
++              <span className={classes.codexPlanLabel}>
++                {metric.key === 'credits_balance'
++                  ? t('plugin_quota.bps_credit_balance')
++                  : metric.label}
++              </span>
++              <span className={classes.codexPlanValue}>
++                {new Intl.NumberFormat(
++                  i18n.resolvedLanguage,
++                  metric.format === 'currency' && metric.currency
++                    ? { style: 'currency', currency: metric.currency }
++                    : { maximumFractionDigits: 2 }
++                ).format(metric.value)}
++                {metric.unit
++                  ? ` ${metric.unit === 'credits' ? t('plugin_quota.bps_credit_unit') : metric.unit}`
++                  : ''}
++              </span>
++            </span>
++          ))}
++        </div>
++      }
++      {quota.groups.length === 0 && !plan && summary.length === 0 && resetCount === null && (
++        <div className={classes.quotaMessage}>{t('plugin_quota.empty_data')}</div>
++      )}
++      {quota.groups.map((group) => {
++        const account = group.label === 'Account usage';
++        const groupLabel = account
++          ? t('plugin_quota.bps_account_usage')
++          : group.label === 'Code review'
++            ? t('plugin_quota.bps_code_review')
++            : group.label === 'Credits'
++              ? t('plugin_quota.bps_credit_balance')
++              : group.label;
++        return (
++          <div key={group.id} className={styles.group}>
++            <div className={styles.heading}>
++              {groupLabel}
++              {account && (
++                <InfoTip
++                  content={t('plugin_quota.bps_estimate_help')}
++                  label={t('plugin_quota.bps_estimate_label')}
++                />
++              )}
++            </div>
++            {group.buckets.map((bucket) => {
++              const used =
++                Math.round((1 - Math.min(1, Math.max(0, bucket.remainingFraction))) * 1000) / 10;
++              const window = bucket.window || bucket.label;
++              const estimate =
++                account && bucket.window ? quota.bpsEstimates?.[bucket.window] : undefined;
++              const resetAt =
++                bucket.resetAtMs ?? (bucket.resetTime ? Date.parse(bucket.resetTime) : NaN);
++              const reset = Number.isFinite(resetAt)
++                ? buildResetDisplay(null, resetAt, now, i18n.resolvedLanguage)
++                : null;
++              const tone =
++                used >= 90 ? styles.danger : used >= 75 ? styles.warning : styles.healthy;
++              const percent = t('plugin_quota.bps_used_percent', { percent: used });
++              return (
++                <div key={bucket.id} className={styles.window} data-bps-window={window}>
++                  {estimate ? (
++                    <div className={styles.estimates}>
++                      <span className={styles.stat}>
++                        {t('plugin_quota.bps_estimated_remaining')}{' '}
++                        <strong>≈ {money.format(estimate.remaining)}</strong>
++                      </span>
++                      <span className={styles.stat}>
++                        {t('plugin_quota.bps_estimated_total')}{' '}
++                        <strong>≈ {money.format(estimate.total)}</strong>
++                      </span>
++                    </div>
++                  ) : account ? (
++                    <div className={styles.pending}>{t('plugin_quota.bps_estimate_pending')}</div>
++                  ) : null}
++                  <div className={styles.row}>
++                    <span className={styles.badge} title={windowLabel(window)}>
++                      {windowLabel(window)}
++                    </span>
++                    <div
++                      className={`${styles.track} ${tone}`}
++                      role="progressbar"
++                      aria-label={`${groupLabel} ${window}`}
++                      aria-valuemin={0}
++                      aria-valuemax={100}
++                      aria-valuenow={used}
++                      aria-valuetext={percent}
++                    >
++                      <div className={styles.fill} style={{ width: `${used}%` }} />
++                    </div>
++                    <span className={`${styles.percent} ${tone}`}>{percent}</span>
++                    {reset && (
++                      <span
++                        className={styles.reset}
++                        title={
++                          bucket.resetTime
++                            ? new Date(bucket.resetTime).toLocaleString(i18n.resolvedLanguage)
++                            : undefined
++                        }
++                      >
++                        {t('plugin_quota.bps_resets', { time: reset.relative || reset.absolute })}
++                      </span>
++                    )}
++                  </div>
++                </div>
++              );
++            })}
++          </div>
++        );
++      })}
++    </div>
++  );
++}
+diff --git a/src/features/quota/providers/plugin/PluginQuotaBody.tsx b/src/features/quota/providers/plugin/PluginQuotaBody.tsx
+index 5bb3575..ec380a2 100644
+--- a/src/features/quota/providers/plugin/PluginQuotaBody.tsx
++++ b/src/features/quota/providers/plugin/PluginQuotaBody.tsx
+@@ -1,6 +1,7 @@
+ import { useTranslation } from 'react-i18next';
+ import type { PluginQuotaMetric, PluginQuotaState } from '@/types';
+ import { InfoTip } from '@/components/ui/Tooltip';
++import { BpsQuotaBody } from './BpsQuotaBody';
+ import { QuotaMeter } from '../../components/QuotaMeter';
+ import type { QuotaBodyProps } from '../../types';
+ 
+@@ -25,6 +26,8 @@ export function PluginQuotaBody({ quota, classes }: QuotaBodyProps<PluginQuotaSt
+   const plan =
+     quota.subscription?.tierName || quota.subscription?.plan || quota.subscription?.tierId;
+ 
++  if (quota.pluginId === 'bps') return <BpsQuotaBody quota={quota} classes={classes} />;
++
+   return (
+     <>
+       {(plan || quota.summary.length > 0) && (
+diff --git a/src/features/quota/providers/plugin/bpsQuota.ts b/src/features/quota/providers/plugin/bpsQuota.ts
+new file mode 100644
+index 0000000..fe61d0f
+--- /dev/null
++++ b/src/features/quota/providers/plugin/bpsQuota.ts
+@@ -0,0 +1,45 @@
++import type { AntigravityQuotaSummaryPayload, PluginQuotaMetric } from '@/types';
++
++export interface BpsQuotaEstimate {
++  total: number;
++  remaining: number;
++}
++
++// Metric indices refer to the original account buckets, before the UI sorts them.
++export function buildBpsQuotaEstimates(
++  payload: AntigravityQuotaSummaryPayload,
++  summary: PluginQuotaMetric[]
++): Record<string, BpsQuotaEstimate> {
++  const estimates: Record<string, BpsQuotaEstimate> = {};
++  const buckets = payload.groups?.find(
++    (group) => (group.displayName ?? group.display_name) === 'Account usage'
++  )?.buckets;
++  if (!Array.isArray(buckets)) return estimates;
++  const metrics = new Map(summary.map((metric) => [metric.key, metric]));
++  buckets.forEach((bucket, index) => {
++    const window = bucket.window?.trim();
++    if (!window || buckets.filter((item) => item.window?.trim() === window).length !== 1) return;
++    const total = metrics.get(`bps_estimated_${index}_total_usd`);
++    const remaining = metrics.get(`bps_estimated_${index}_remaining_usd`);
++    if (
++      !total ||
++      !remaining ||
++      total.format !== 'currency' ||
++      remaining.format !== 'currency' ||
++      total.currency !== 'USD' ||
++      remaining.currency !== 'USD' ||
++      !Number.isFinite(total.value) ||
++      total.value <= 0 ||
++      !Number.isFinite(remaining.value) ||
++      remaining.value < 0 ||
++      remaining.value > total.value
++    )
++      return;
++    estimates[window] = { total: total.value, remaining: remaining.value };
++  });
++  return estimates;
++}
++
++export function isBpsEstimateMetric(metric: PluginQuotaMetric): boolean {
++  return /^bps_estimated_[0-9]+_(remaining|total)_usd$/.test(metric.key);
++}
+diff --git a/src/features/quota/providers/plugin/data.ts b/src/features/quota/providers/plugin/data.ts
+index 6e8c7ef..037e9d7 100644
+--- a/src/features/quota/providers/plugin/data.ts
++++ b/src/features/quota/providers/plugin/data.ts
+@@ -8,6 +8,7 @@ import type {
+   PluginQuotaState,
+ } from '@/types';
+ import { apiClient } from '@/services/api/client';
++import { guardConfigConnection } from '@/services/api/configValue';
+ import { pluginsApi } from '@/services/api/plugins';
+ import { normalizeAuthIndex } from '@/utils/authIndex';
+ import {
+@@ -17,13 +18,18 @@ import {
+   selectedQuotaPluginId,
+ } from '@/utils/quota';
+ import type { QuotaProviderData } from '../types';
++import { buildBpsQuotaEstimates } from './bpsQuota';
+ 
+ type PluginQuotaPayload = AntigravityQuotaSummaryPayload & {
++  serverTimeOffsetMs?: number;
+   subscription?: Partial<AntigravityQuotaSubscription> | null;
+   summary?: Array<Partial<PluginQuotaMetric>>;
+ };
+ 
+ type PluginQuotaData = {
++  pluginId: string;
++  bpsEstimates?: PluginQuotaState['bpsEstimates'];
++  serverTimeOffsetMs?: number;
+   groups: PluginQuotaState['groups'];
+   subscription: AntigravityQuotaSubscription | null;
+   summary: PluginQuotaMetric[];
+@@ -141,18 +147,57 @@ export const fetchPluginQuota = async (
+     `/plugins/${encodeURIComponent(pluginId)}/quota`,
+     { auth_index: authIndex }
+   );
++  const summary = normalizePluginQuotaSummary(payload.summary);
+   return {
++    pluginId,
+     groups: buildAntigravityQuotaGroups(payload),
+     subscription: normalizeSubscription(payload.subscription),
+-    summary: normalizePluginQuotaSummary(payload.summary),
++    summary,
++    ...(pluginId === 'bps' ? { bpsEstimates: buildBpsQuotaEstimates(payload, summary) } : {}),
++    ...(typeof payload.serverTimeOffsetMs === 'number' &&
++    Number.isFinite(payload.serverTimeOffsetMs)
++      ? { serverTimeOffsetMs: payload.serverTimeOffsetMs }
++      : {}),
+   };
+ };
+ 
++export const resetBpsQuota = async (file: AuthFileItem, t: TFunction): Promise<PluginQuotaData> => {
++  const authIndex = normalizeAuthIndex(file.authIndex ?? file['auth_index']);
++  if (!authIndex) throw new Error(t('plugin_quota.missing_auth_index'));
++  if (selectedQuotaPluginId(file) !== 'bps') throw new Error(t('codex_quota.reset_not_confirmed'));
++  const assertConnection = guardConfigConnection();
++  const result = await apiClient.delete<{ status?: string; auth_index?: string }>(
++    '/plugins/bps/quota',
++    { params: { auth_index: authIndex } }
++  );
++  assertConnection();
++  if (result.status !== 'ok' || result.auth_index !== authIndex) {
++    throw new Error(t('codex_quota.reset_not_confirmed'));
++  }
++  try {
++    // The v8 reset endpoint clears routing cooldown only after upstream confirmation.
++    const data = await fetchPluginQuota(file, t);
++    assertConnection();
++    return data;
++  } catch {
++    throw new Error(t('plugin_quota.bps_reset_refresh_failed'));
++  }
++};
++
+ export const PLUGIN_CONFIG: QuotaProviderData<PluginQuotaState, PluginQuotaData> = {
+   type: 'plugin',
+   i18nPrefix: 'plugin_quota',
+   filterFn: (file) => isPluginQuotaFile(file) && !isDisabledAuthFile(file),
+   fetchQuota: fetchPluginQuota,
++  resetQuota: resetBpsQuota,
++  canResetQuota: (quota) =>
++    quota.pluginId === 'bps' &&
++    quota.summary.some(
++      (metric) =>
++        metric.key === 'rate_limit_reset_credits_available_count' &&
++        Number.isSafeInteger(metric.value) &&
++        metric.value > 0
++    ),
+   storeSelector: (state) => state.pluginQuota,
+   storeSetter: 'setPluginQuota',
+   buildLoadingState: () => ({ status: 'loading', groups: [], subscription: null, summary: [] }),
+diff --git a/src/i18n/locales/en.json b/src/i18n/locales/en.json
+index c732027..c6e2395 100644
+--- a/src/i18n/locales/en.json
++++ b/src/i18n/locales/en.json
+@@ -482,7 +482,24 @@
+     "plugin_not_found": "No enabled plugin provides quota for {{provider}}",
+     "empty_data": "No quota data available",
+     "plan_label": "Plan",
+-    "remaining_percent": "{{percent}}% remaining"
++    "remaining_percent": "{{percent}}% remaining",
++    "bps_account_usage": "Account usage",
++    "bps_estimate_label": "About the estimate",
++    "bps_estimate_help": "Estimated total = priced CPA usage change ÷ quota percentage-point change × 100. Estimated remaining = total × remaining fraction. Estimates update as samples grow; rounded percentages, model mix and usage outside CPA can change the result. This is API value, not an official dollar balance. Windows share usage and must not be added together.",
++    "bps_estimated_remaining": "Est. remaining",
++    "bps_estimated_total": "Est. total",
++    "bps_estimate_pending": "USD estimate awaiting valid usage samples",
++    "bps_used_percent": "{{percent}}% used",
++    "bps_resets": "Resets {{time}}",
++    "bps_unknown": "Unknown",
++    "bps_credit_unit": "credits",
++    "bps_code_review": "Code review",
++    "bps_days": "{{count}}d",
++    "bps_hours": "{{count}}h",
++    "bps_minutes": "{{count}}m",
++    "bps_seconds": "{{count}}s",
++    "bps_reset_refresh_failed": "Quota reset succeeded, but refreshing the balance failed. Refresh quota; do not redeem another credit.",
++    "bps_credit_balance": "Credit balance"
+   },
+   "claude_quota": {
+     "title": "Claude Quota",
+diff --git a/src/i18n/locales/ko.json b/src/i18n/locales/ko.json
+index 23ce80f..7ca09f6 100644
+--- a/src/i18n/locales/ko.json
++++ b/src/i18n/locales/ko.json
+@@ -482,7 +482,24 @@
+     "plugin_not_found": "{{provider}}의 할당량을 제공하는 활성 플러그인을 찾을 수 없습니다",
+     "empty_data": "사용 가능한 할당량 데이터가 없습니다",
+     "plan_label": "플랜",
+-    "remaining_percent": "{{percent}}% 남음"
++    "remaining_percent": "{{percent}}% 남음",
++    "bps_account_usage": "계정 사용량",
++    "bps_estimate_label": "추정값 안내",
++    "bps_estimate_help": "총 추정액 = CPA 비용 증가분 ÷ 사용률 증가분 × 100. 남은 추정액 = 총액 × 잔여 비율. 새 표본, 반올림, 모델 구성 및 CPA 외 사용에 따라 달라집니다. 공식 달러 잔액이 아닌 API 가치 추정값이며 기간별 금액을 합산하면 안 됩니다.",
++    "bps_estimated_remaining": "남은 추정액",
++    "bps_estimated_total": "총 추정액",
++    "bps_estimate_pending": "USD 추정에 필요한 사용량 표본 대기 중",
++    "bps_used_percent": "{{percent}}% 사용",
++    "bps_resets": "초기화: {{time}}",
++    "bps_unknown": "알 수 없음",
++    "bps_credit_unit": "크레딧",
++    "bps_code_review": "코드 검토",
++    "bps_days": "{{count}}일",
++    "bps_hours": "{{count}}시간",
++    "bps_minutes": "{{count}}분",
++    "bps_seconds": "{{count}}초",
++    "bps_reset_refresh_failed": "한도 초기화는 성공했지만 잔액 새로고침에 실패했습니다. 다시 조회하고 추가 초기화 크레딧을 사용하지 마세요.",
++    "bps_credit_balance": "크레딧 잔액"
+   },
+   "claude_quota": {
+     "title": "Claude 할당량",
+diff --git a/src/i18n/locales/ru.json b/src/i18n/locales/ru.json
+index 8fd381c..defdac0 100644
+--- a/src/i18n/locales/ru.json
++++ b/src/i18n/locales/ru.json
+@@ -656,7 +656,24 @@
+     "plugin_not_found": "Не найден активный плагин, предоставляющий квоту для {{provider}}",
+     "empty_data": "Нет доступных данных о квоте",
+     "plan_label": "План",
+-    "remaining_percent": "Осталось {{percent}}%"
++    "remaining_percent": "Осталось {{percent}}%",
++    "bps_account_usage": "Использование аккаунта",
++    "bps_estimate_label": "Оценка квоты",
++    "bps_estimate_help": "Общая оценка = изменение стоимости запросов CPA ÷ изменение процента использования × 100. Остаток = общая оценка × оставшаяся доля. Новые данные, округление, выбор модели и использование вне CPA меняют оценку. Это оценка стоимости API, а не официальный баланс. Окна нельзя суммировать.",
++    "bps_estimated_remaining": "Остаток ≈",
++    "bps_estimated_total": "Всего ≈",
++    "bps_estimate_pending": "Ожидание данных для оценки в USD",
++    "bps_used_percent": "Использовано {{percent}}%",
++    "bps_resets": "Сброс: {{time}}",
++    "bps_unknown": "Неизвестно",
++    "bps_credit_unit": "кредитов",
++    "bps_code_review": "Проверка кода",
++    "bps_days": "{{count}}д",
++    "bps_hours": "{{count}}ч",
++    "bps_minutes": "{{count}}м",
++    "bps_seconds": "{{count}}с",
++    "bps_reset_refresh_failed": "Квота сброшена, но обновление данных не удалось. Обновите квоту; не расходуйте ещё один кредит.",
++    "bps_credit_balance": "Остаток кредитов"
+   },
+   "kimi_quota": {
+     "plan_label": "Тариф",
+diff --git a/src/i18n/locales/tr.json b/src/i18n/locales/tr.json
+index 273d851..135bf40 100644
+--- a/src/i18n/locales/tr.json
++++ b/src/i18n/locales/tr.json
+@@ -482,7 +482,24 @@
+     "plugin_not_found": "{{provider}} için Kota Sağlayan Etkin Eklenti Yok",
+     "empty_data": "Kullanılabilir Kota Verisi Yok",
+     "plan_label": "Plan",
+-    "remaining_percent": "%{{percent}} Kaldı"
++    "remaining_percent": "%{{percent}} Kaldı",
++    "bps_account_usage": "Hesap kullanımı",
++    "bps_estimate_label": "Tahmin hakkında",
++    "bps_estimate_help": "Tahmini toplam = CPA maliyet değişimi ÷ kullanım yüzdesi puanı değişimi × 100. Kalan = toplam × kalan oran. Yeni örnekler, yuvarlama, model seçimi ve CPA dışı kullanım tahmini değiştirebilir. Bu resmi dolar bakiyesi değil, API değeri tahminidir. Dönemler birbirine eklenmez.",
++    "bps_estimated_remaining": "Tahmini kalan",
++    "bps_estimated_total": "Tahmini toplam",
++    "bps_estimate_pending": "USD tahmini için geçerli kullanım örnekleri bekleniyor",
++    "bps_used_percent": "%{{percent}} kullanıldı",
++    "bps_resets": "Sıfırlama: {{time}}",
++    "bps_unknown": "Bilinmiyor",
++    "bps_credit_unit": "kredi",
++    "bps_code_review": "Kod inceleme",
++    "bps_days": "{{count}}g",
++    "bps_hours": "{{count}}s",
++    "bps_minutes": "{{count}}dk",
++    "bps_seconds": "{{count}}sn",
++    "bps_reset_refresh_failed": "Kota sıfırlandı ancak bakiye yenilenemedi. Kotayı yenileyin; başka sıfırlama kredisi kullanmayın.",
++    "bps_credit_balance": "Kredi Bakiyesi"
+   },
+   "claude_quota": {
+     "title": "Claude Kotası",
+diff --git a/src/i18n/locales/vi.json b/src/i18n/locales/vi.json
+index ecb555b..750caba 100644
+--- a/src/i18n/locales/vi.json
++++ b/src/i18n/locales/vi.json
+@@ -482,7 +482,24 @@
+     "plugin_not_found": "Không tìm thấy plugin đang bật cung cấp quota cho {{provider}}",
+     "empty_data": "Chưa có dữ liệu quota",
+     "plan_label": "Gói",
+-    "remaining_percent": "Còn lại {{percent}}%"
++    "remaining_percent": "Còn lại {{percent}}%",
++    "bps_account_usage": "Mức sử dụng tài khoản",
++    "bps_estimate_label": "Về ước tính",
++    "bps_estimate_help": "Tổng ước tính = thay đổi chi phí CPA ÷ thay đổi điểm phần trăm sử dụng × 100. Còn lại = tổng × tỷ lệ còn lại. Mẫu mới, làm tròn, lựa chọn mô hình và sử dụng ngoài CPA có thể thay đổi ước tính. Đây là giá trị API ước tính, không phải số dư USD chính thức. Không cộng các cửa sổ với nhau.",
++    "bps_estimated_remaining": "Còn lại ước tính",
++    "bps_estimated_total": "Tổng ước tính",
++    "bps_estimate_pending": "Đang chờ mẫu sử dụng hợp lệ để ước tính USD",
++    "bps_used_percent": "Đã dùng {{percent}}%",
++    "bps_resets": "Đặt lại: {{time}}",
++    "bps_unknown": "Chưa rõ",
++    "bps_credit_unit": "điểm",
++    "bps_code_review": "Đánh giá mã",
++    "bps_days": "{{count}} ngày",
++    "bps_hours": "{{count}} giờ",
++    "bps_minutes": "{{count}} phút",
++    "bps_seconds": "{{count}} giây",
++    "bps_reset_refresh_failed": "Đặt lại hạn mức thành công nhưng không thể làm mới số dư. Hãy truy vấn lại, không dùng thêm lượt đặt lại.",
++    "bps_credit_balance": "Số dư Credit"
+   },
+   "claude_quota": {
+     "title": "Quota Claude",
+diff --git a/src/i18n/locales/zh-CN.json b/src/i18n/locales/zh-CN.json
+index c8f773f..7406699 100644
+--- a/src/i18n/locales/zh-CN.json
++++ b/src/i18n/locales/zh-CN.json
+@@ -650,7 +650,24 @@
+     "plugin_not_found": "未找到为 {{provider}} 提供额度查询的已启用插件",
+     "empty_data": "暂无可用额度数据",
+     "plan_label": "套餐",
+-    "remaining_percent": "剩余 {{percent}}%"
++    "remaining_percent": "剩余 {{percent}}%",
++    "bps_account_usage": "账户用量",
++    "bps_estimate_label": "额度估算说明",
++    "bps_estimate_help": "估算总额 = CPA 观测消费增量 ÷ 额度使用百分比增量 × 100；估算剩余 = 总额 × 剩余比例。新增样本、百分比取整、模型组合和 CPA 之外的使用都会影响估值。这是 API 使用价值估算，不是官方美元余额。各窗口共享用量，不能相加。",
++    "bps_estimated_remaining": "估算剩余",
++    "bps_estimated_total": "估算总额",
++    "bps_estimate_pending": "美元估算等待有效用量样本",
++    "bps_used_percent": "已用 {{percent}}%",
++    "bps_resets": "重置：{{time}}",
++    "bps_unknown": "未知",
++    "bps_credit_unit": "积分",
++    "bps_code_review": "代码审查",
++    "bps_days": "{{count}}天",
++    "bps_hours": "{{count}}小时",
++    "bps_minutes": "{{count}}分钟",
++    "bps_seconds": "{{count}}秒",
++    "bps_reset_refresh_failed": "额度已重置成功，但刷新余额失败。请重新查询额度，不要重复消耗重置次数。",
++    "bps_credit_balance": "积分余额"
+   },
+   "kimi_quota": {
+     "plan_label": "套餐",
+diff --git a/src/i18n/locales/zh-TW.json b/src/i18n/locales/zh-TW.json
+index ad5ccab..0735b55 100644
+--- a/src/i18n/locales/zh-TW.json
++++ b/src/i18n/locales/zh-TW.json
+@@ -650,7 +650,24 @@
+     "plugin_not_found": "找不到為 {{provider}} 提供配額查詢的已啟用插件",
+     "empty_data": "暫無可用配額資料",
+     "plan_label": "方案",
+-    "remaining_percent": "剩餘 {{percent}}%"
++    "remaining_percent": "剩餘 {{percent}}%",
++    "bps_account_usage": "帳戶用量",
++    "bps_estimate_label": "額度估算說明",
++    "bps_estimate_help": "估算總額 = CPA 觀測消費增量 ÷ 額度使用百分比增量 × 100；估算剩餘 = 總額 × 剩餘比例。新增樣本、百分比取整、模型組合及 CPA 之外的使用會影響估值。這是 API 使用價值估算，並非官方美元餘額。各時段共用用量，不能相加。",
++    "bps_estimated_remaining": "估算剩餘",
++    "bps_estimated_total": "估算總額",
++    "bps_estimate_pending": "美元估算等待有效用量樣本",
++    "bps_used_percent": "已用 {{percent}}%",
++    "bps_resets": "重設：{{time}}",
++    "bps_unknown": "未知",
++    "bps_credit_unit": "積分",
++    "bps_code_review": "程式碼審查",
++    "bps_days": "{{count}}天",
++    "bps_hours": "{{count}}小時",
++    "bps_minutes": "{{count}}分鐘",
++    "bps_seconds": "{{count}}秒",
++    "bps_reset_refresh_failed": "額度已重設成功，但重新整理餘額失敗。請重新查詢額度，不要重複消耗重設次數。",
++    "bps_credit_balance": "Credit 餘額"
+   },
+   "kimi_quota": {
+     "plan_label": "方案",
+diff --git a/src/types/quota.ts b/src/types/quota.ts
+index 7df6696..d14ebcd 100644
+--- a/src/types/quota.ts
++++ b/src/types/quota.ts
+@@ -280,6 +280,8 @@ export interface PluginQuotaMetric {
+ }
+ 
+ export interface PluginQuotaState extends AntigravityQuotaState {
++  pluginId?: string;
++  bpsEstimates?: Record<string, { total: number; remaining: number }>;
+   summary: PluginQuotaMetric[];
+ }
+ 
+diff --git a/tests/bpsQuota.test.ts b/tests/bpsQuota.test.ts
+new file mode 100644
+index 0000000..a305f6f
+--- /dev/null
++++ b/tests/bpsQuota.test.ts
+@@ -0,0 +1,133 @@
++import { describe, expect, test } from 'bun:test';
++import { createElement } from 'react';
++import { renderToStaticMarkup } from 'react-dom/server';
++import i18n from '@/i18n';
++import { I18nextProvider } from 'react-i18next';
++import type { AntigravityQuotaSummaryPayload, PluginQuotaMetric, PluginQuotaState } from '@/types';
++import { buildAntigravityQuotaGroups } from '@/utils/quota';
++import { buildBpsQuotaEstimates } from '@/features/quota/providers/plugin/bpsQuota';
++import { PluginQuotaBody } from '@/features/quota/providers/plugin/PluginQuotaBody';
++import { QUOTA_CLASS_KEYS, bindQuotaClasses } from '@/features/quota/types';
++
++const classes = bindQuotaClasses(
++  Object.fromEntries(QUOTA_CLASS_KEYS.map((key) => [key, key])),
++  'test'
++);
++const metric = (index: number, kind: string, value: number): PluginQuotaMetric => ({
++  key: `bps_estimated_${index}_${kind}_usd`,
++  label: `raw-estimate-${kind}`,
++  value,
++  format: 'currency',
++  currency: 'USD',
++});
++const payload: AntigravityQuotaSummaryPayload = {
++  groups: [
++    {
++      displayName: 'Account usage',
++      buckets: [
++        { window: '7d', remainingFraction: 0.75, resetTime: '2099-01-01T00:00:00Z' },
++        { window: '5h', remainingFraction: 0.4 },
++      ],
++    },
++    { displayName: 'Code review', buckets: [{ window: '7d', remainingFraction: 0.9 }] },
++  ],
++};
++const summary = [
++  metric(0, 'total', 100),
++  metric(0, 'remaining', 75),
++  metric(1, 'total', 20),
++  metric(1, 'remaining', 8),
++];
++const state = (): PluginQuotaState => ({
++  status: 'success',
++  pluginId: 'bps',
++  summary,
++  groups: buildAntigravityQuotaGroups(payload),
++  bpsEstimates: buildBpsQuotaEstimates(payload, summary),
++});
++const chinese = i18n.cloneInstance({ lng: 'zh-CN' });
++const render = (quota: PluginQuotaState) =>
++  renderToStaticMarkup(
++    createElement(
++      I18nextProvider,
++      { i18n: chinese },
++      createElement(PluginQuotaBody, { quota, classes })
++    )
++  );
++
++describe('BPS compact quota presentation', () => {
++  test('maps estimates by original window identity even when rendered order changes', () => {
++    expect(buildBpsQuotaEstimates(payload, summary)).toEqual({
++      '7d': { total: 100, remaining: 75 },
++      '5h': { total: 20, remaining: 8 },
++    });
++    const quota = state();
++    quota.groups[0].buckets.reverse();
++    const markup = render(quota);
++    expect(markup).toContain('data-bps-window="7d"');
++    expect(markup).toContain('aria-valuenow="25"');
++    expect(markup).toContain('aria-valuenow="60"');
++    expect(markup.match(/≈/g)?.length).toBe(4);
++    expect(markup).not.toContain('class="quotaBar"');
++    expect(markup).not.toContain('raw-estimate-total');
++    expect(markup).toContain('估算总额');
++    expect(markup).toContain('已用 25%');
++  });
++
++  test('renders empty and exhausted quotas in the correct used-percent direction', () => {
++    const quota = state();
++    quota.groups = buildAntigravityQuotaGroups({
++      groups: [
++        {
++          displayName: 'Account usage',
++          buckets: [
++            { window: '5h', remainingFraction: 1 },
++            { window: '7d', remainingFraction: 0 },
++          ],
++        },
++      ],
++    });
++    quota.bpsEstimates = {};
++    const markup = render(quota);
++    expect(markup).toContain('aria-valuenow="0"');
++    expect(markup).toContain('aria-valuenow="100"');
++    expect(markup).toContain('width:0%');
++    expect(markup).toContain('width:100%');
++    expect(markup).toContain(chinese.t('plugin_quota.bps_estimate_pending'));
++    expect(markup).not.toContain('$0.00');
++  });
++
++  test('rejects partial, nonfinite, negative and inconsistent estimates', () => {
++    for (const metrics of [
++      [metric(0, 'total', 100)],
++      [metric(0, 'total', NaN), metric(0, 'remaining', 75)],
++      [metric(0, 'total', 100), metric(0, 'remaining', -1)],
++      [metric(0, 'total', 100), metric(0, 'remaining', 101)],
++    ])
++      expect(buildBpsQuotaEstimates(payload, metrics)).toEqual({});
++    expect(
++      buildBpsQuotaEstimates(payload, [metric(0, 'total', 100), metric(0, 'remaining', 0)])['7d']
++        .remaining
++    ).toBe(0);
++  });
++
++  test('keeps other plugins on their existing renderer', () => {
++    const quota = state();
++    quota.pluginId = 'another-plugin';
++    const markup = render(quota);
++    expect(markup).not.toContain('data-bps-quota-layout');
++    expect(markup).toContain('class="quotaBar"');
++    expect(markup).toContain('raw-estimate-total');
++  });
++
++  test('preserves credits without presenting them as dollars', () => {
++    const quota = state();
++    quota.summary = [
++      ...summary,
++      { key: 'credits_balance', label: 'Credits balance', value: 40, unit: 'credits' },
++    ];
++    const markup = render(quota);
++    expect(markup).toContain('40 ' + chinese.t('plugin_quota.bps_credit_unit'));
++    expect(markup).not.toContain('$40.00');
++  });
++});
+diff --git a/tests/bpsQuotaReset.test.ts b/tests/bpsQuotaReset.test.ts
+new file mode 100644
+index 0000000..f7199ab
+--- /dev/null
++++ b/tests/bpsQuotaReset.test.ts
+@@ -0,0 +1,92 @@
++import { afterEach, describe, expect, spyOn, test } from 'bun:test';
++import i18n from '@/i18n';
++import { apiClient } from '@/services/api/client';
++import { PLUGIN_CONFIG, resetBpsQuota } from '@/features/quota/providers/plugin/data';
++import type { PluginQuotaState } from '@/types';
++
++const file = {
++  name: 'bps-test.json',
++  auth_index: 'fixture-index',
++  type: 'bps',
++  quotaPluginId: 'bps',
++};
++const mocks: Array<{ mockRestore(): void }> = [];
++afterEach(() => {
++  for (const mock of mocks.splice(0)) mock.mockRestore();
++});
++
++describe('BPS quota reset', () => {
++  test('shows the shared reset action only for a known available BPS credit', () => {
++    const state: PluginQuotaState = { status: 'success', pluginId: 'bps', groups: [], summary: [] };
++    expect(PLUGIN_CONFIG.canResetQuota!(state)).toBe(false);
++    for (const value of [0, -1, NaN, 1.5]) {
++      state.summary = [
++        { key: 'rate_limit_reset_credits_available_count', label: 'Reset count', value },
++      ];
++      expect(PLUGIN_CONFIG.canResetQuota!(state)).toBe(false);
++    }
++    state.summary[0].value = 2;
++    expect(PLUGIN_CONFIG.canResetQuota!(state)).toBe(true);
++    state.pluginId = 'other';
++    expect(PLUGIN_CONFIG.canResetQuota!(state)).toBe(false);
++  });
++
++  test('resets the selected credential once, then refreshes its quota', async () => {
++    const calls: string[] = [];
++    const reset = spyOn(apiClient, 'delete').mockImplementation(async () => {
++      calls.push('reset');
++      return { status: 'ok', auth_index: 'fixture-index' };
++    });
++    const read = spyOn(apiClient, 'post').mockImplementation(async () => {
++      calls.push('read');
++      return { groups: [], summary: [] };
++    });
++    mocks.push(reset, read);
++    const result = await resetBpsQuota(file, i18n.t);
++    expect(calls).toEqual(['reset', 'read']);
++    expect(reset).toHaveBeenCalledWith('/plugins/bps/quota', {
++      params: { auth_index: 'fixture-index' },
++    });
++    expect(read).toHaveBeenCalledWith('/plugins/bps/quota', { auth_index: 'fixture-index' });
++    expect(result.pluginId).toBe('bps');
++  });
++
++  test('does not retry an unconfirmed redemption or refresh another credential', async () => {
++    const reset = spyOn(apiClient, 'delete').mockResolvedValue({
++      status: 'ok',
++      auth_index: 'other',
++    });
++    const read = spyOn(apiClient, 'post').mockResolvedValue({});
++    mocks.push(reset, read);
++    await expect(resetBpsQuota(file, i18n.t)).rejects.toThrow();
++    expect(reset).toHaveBeenCalledTimes(1);
++    expect(read).not.toHaveBeenCalled();
++  });
++
++  test('distinguishes a successful reset from a failed balance refresh', async () => {
++    const reset = spyOn(apiClient, 'delete').mockResolvedValue({
++      status: 'ok',
++      auth_index: 'fixture-index',
++    });
++    const read = spyOn(apiClient, 'post').mockRejectedValue(new Error('offline'));
++    mocks.push(reset, read);
++    await expect(resetBpsQuota(file, i18n.t)).rejects.toThrow(
++      i18n.t('plugin_quota.bps_reset_refresh_failed')
++    );
++    expect(reset).toHaveBeenCalledTimes(1);
++  });
++
++  test('stops follow-up work after the active connection changes', async () => {
++    const revision = spyOn(apiClient, 'getConnectionRevision')
++      .mockReturnValueOnce(1)
++      .mockReturnValue(2);
++    const reset = spyOn(apiClient, 'delete').mockResolvedValue({
++      status: 'ok',
++      auth_index: 'fixture-index',
++    });
++    const read = spyOn(apiClient, 'post').mockResolvedValue({});
++    mocks.push(revision, reset, read);
++    await expect(resetBpsQuota(file, i18n.t)).rejects.toThrow();
++    expect(read).not.toHaveBeenCalled();
++  });
++});

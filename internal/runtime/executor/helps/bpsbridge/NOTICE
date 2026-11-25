@@ -1,0 +1,16 @@
+BPS Responses protocol adapter adapted from:
+https://github.com/sunboyzoey/bps-local-public
+Commit: c66fb41006baf7ede70af69a3e2f81af6a6c246b
+Source: internal/basispoints (including the temporary image relay; excluding standalone routing).
+
+Changes: package/import paths and CPA JSON/regexp implementations.
+Transport, authentication, scheduling, final payload rules, and usage reporting
+are provided by CLIProxyAPI. Upstream license is reproduced in LICENSE.upstream.
+
+The pre-generation handshake error classification and Retry-After parsing in
+handshake.go are adapted from the same upstream commit:
+  internal/proxy/websocket_handshake.go (originating in PR #1)
+  internal/retryafter/retry.go
+CPA uses caller cancellation instead of standalone fixed deadlines, preserves
+HTTP rejection hints for its scheduler, and prevents outer retry multiplication.
+content_test.go additionally adapts the upstream normalization regression tests.

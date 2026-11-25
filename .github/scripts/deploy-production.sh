@@ -40,7 +40,8 @@ printf '%s\n' "$rollback_image" > "$backup/rollback-image"
 mkdir "$backup/source"
 git archive "$target" | tar -x -C "$backup/source"
 image="local/cli-proxy-api:bps-${target:0:12}"
-version=$(git describe --tags --match 'v*' --abbrev=0 "$target")
+version=$(cat "$backup/source/.github/upstream-version")
+[[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
 DOCKER_BUILDKIT=1 docker build \
   --build-arg VERSION="$version-bps" \
   --build-arg COMMIT="$target" \
@@ -89,7 +90,14 @@ rollback() {
     else
       rm -f "$plugin"
     fi
-    CLI_PROXY_IMAGE="$rollback_image" docker compose up -d --no-build --pull never --no-deps cli-proxy-api || true
+    python3 - "$backup/previous-compose.json" "$backup/rollback-compose.json" "$rollback_image" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+data['services']['cli-proxy-api']['image'] = sys.argv[3]
+with open(sys.argv[2], 'w') as out:
+    json.dump(data, out)
+PY
+    docker compose -f "$backup/rollback-compose.json" up -d --no-build --pull never --no-deps cli-proxy-api || true
     echo "Deployment failed; previous image/config restored. Backup: $backup"
   fi
   exit "$status"

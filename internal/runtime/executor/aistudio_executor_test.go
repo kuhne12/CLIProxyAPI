@@ -686,7 +686,7 @@ func TestAIStudioExecutorClaudeMalformedFunctionCallReturnsRetryableError(t *tes
 	}
 }
 
-func TestAIStudioExecutorClaudeMalformedFunctionCallCancelAfterErrorRecordsConductorFailure(t *testing.T) {
+func TestAIStudioExecutorClaudeMalformedFunctionCallCancelAfterErrorPreservesUsageWithoutCooldown(t *testing.T) {
 	malformedBody := `{"candidates":[{"content":{"role":"model","parts":[]},"finishReason":"MALFORMED_FUNCTION_CALL"}],"usageMetadata":{"promptTokenCount":120,"candidatesTokenCount":10,"thoughtsTokenCount":313,"totalTokenCount":443},"modelVersion":"gemini-4-argon"}`
 	for _, mode := range []string{"stream_end", "http_resp"} {
 		t.Run(mode, func(t *testing.T) {
@@ -801,7 +801,28 @@ func TestAIStudioExecutorClaudeMalformedFunctionCallCancelAfterErrorRecordsCondu
 				}
 			}
 			assertMalformedFunctionCallFailedUsage(t, capture.records)
-			assertMalformedFunctionCallConductorResultUncooled(t, manager, auth.ID, "gemini-4-argon", resultHook.results)
+			if mode == "stream_end" {
+				// Cancellation may reach the conductor before the terminal error chunk.
+				// In that case upstream intentionally skips credential failure accounting.
+				updated, okAuth := manager.GetByID(auth.ID)
+				if !okAuth || updated == nil {
+					t.Fatal("credential disappeared after stream cancellation")
+				}
+				if updated.Success != 0 || updated.Failed > 1 {
+					t.Fatalf("unexpected canceled stream counters: success=%d failed=%d", updated.Success, updated.Failed)
+				}
+				if updated.Unavailable || !updated.NextRetryAfter.IsZero() {
+					t.Fatal("canceled stream unexpectedly cooled credential")
+				}
+				if state := updated.ModelStates["gemini-4-argon"]; state != nil && (state.Unavailable || !state.NextRetryAfter.IsZero()) {
+					t.Fatal("canceled stream unexpectedly cooled model")
+				}
+				if updated.Failed == 1 {
+					assertMalformedFunctionCallConductorResultUncooled(t, manager, auth.ID, "gemini-4-argon", resultHook.results)
+				}
+			} else {
+				assertMalformedFunctionCallConductorResultUncooled(t, manager, auth.ID, "gemini-4-argon", resultHook.results)
+			}
 			if errClient := <-clientDone; errClient != nil {
 				t.Fatal(errClient)
 			}

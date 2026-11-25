@@ -108,6 +108,7 @@ func (s *Service) Run(ctx context.Context) error {
 
 	if !homeEnabled {
 		s.startCopilotCatalogRefresh(ctx)
+		s.startBPSCatalogRefresh(ctx)
 		tokenResult, err := s.tokenProvider.Load(ctx, cfg)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			return err
@@ -277,7 +278,16 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		}
 		s.cfgMu.RLock()
 		catalogs := s.copilotCatalogs
+		bpsCatalogs := s.bpsCatalogs
 		s.cfgMu.RUnlock()
+		if bpsCatalogs != nil {
+			bpsCatalogs.cancel()
+			select {
+			case <-bpsCatalogs.done:
+			case <-ctx.Done():
+				shutdownErr = ctx.Err()
+			}
+		}
 		if catalogs != nil {
 			catalogs.cancel()
 			select {

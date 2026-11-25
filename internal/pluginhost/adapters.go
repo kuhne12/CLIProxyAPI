@@ -579,6 +579,11 @@ func (h *Host) callModelsForAuth(ctx context.Context, record capabilityRecord, p
 			err = fmt.Errorf("model provider per-auth models panic: %v", recovered)
 		}
 	}()
+	// RPC plugins use this context to resolve host HTTP callbacks. Preserve the
+	// credential proxy just as the in-process HTTPClient below does.
+	if auth.ProxyURL != "" {
+		ctx = WithOAuthProxyURL(ctx, auth.ProxyURL)
+	}
 	return provider.ModelsForAuth(ctx, pluginapi.AuthModelRequest{
 		Plugin:       record.meta,
 		AuthID:       auth.ID,

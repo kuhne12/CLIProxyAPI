@@ -49,7 +49,7 @@ func handleMethod(method string, raw []byte) ([]byte, error) {
 		}
 		return okEnvelope(map[string]any{
 			"schema_version": pluginabi.SchemaVersion,
-			"metadata": pluginapi.Metadata{Name: "bps", Version: "0.5.6", Author: "CLIProxyAPI contributors",
+			"metadata": pluginapi.Metadata{Name: "bps", Version: "0.5.7", Author: "CLIProxyAPI contributors",
 				GitHubRepository: "https://github.com/router-for-me/CLIProxyAPI", ConfigFields: []pluginapi.ConfigField{{
 					Name: "cache-creation-as-input", Type: pluginapi.ConfigFieldTypeBoolean, Default: false,
 					Description: "Report BPS cache creation as regular input to downstream clients. Total input and cache reads stay unchanged; CPA retains original upstream usage. Requires the matching CPA BPS executor.",
@@ -76,21 +76,11 @@ func handleMethod(method string, raw []byte) ([]byte, error) {
 	case pluginabi.MethodPluginQuiesce, pluginabi.MethodPluginShutdown:
 		authProvider.Close()
 		return okEnvelope(struct{}{})
-	case pluginabi.MethodModelStatic, pluginabi.MethodModelForAuth:
-		return dispatch(raw, func(req pluginapi.AuthModelRequest) (pluginapi.ModelResponse, error) {
-			response := pluginapi.ModelResponse{Provider: "bps"}
-			if req.AuthProvider != "" && req.AuthProvider != "bps" {
-				return response, nil
-			}
-			for _, id := range []string{"gpt-6-astra", "gpt-6-sol", "gpt-6.2-astra", "gpt-6.2-sol"} {
-				levels := []string{"low", "medium", "high", "xhigh"}
-				if strings.Contains(id, "6.2-") {
-					levels = append(levels, "max")
-				}
-				response.Models = append(response.Models, pluginapi.ModelInfo{ID: id, Object: "model", OwnedBy: "bps", Type: "bps", DisplayName: id, Name: id,
-					SupportedInputModalities: []string{"text", "image"}, SupportedOutputModalities: []string{"text"}, Thinking: &pluginapi.ThinkingSupport{Levels: levels}})
-			}
-			return response, nil
+	case pluginabi.MethodModelStatic:
+		return okEnvelope(pluginapi.ModelResponse{Provider: "bps"})
+	case pluginabi.MethodModelForAuth:
+		return dispatch(raw, func(req bpsModelRequest) (pluginapi.ModelResponse, error) {
+			return bpsModels.discover(req, callHostAPI)
 		})
 	case pluginabi.MethodAuthIdentifier, pluginabi.MethodQuotaIdentifier:
 		return okEnvelope(map[string]string{"identifier": "bps"})

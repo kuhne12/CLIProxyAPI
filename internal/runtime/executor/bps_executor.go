@@ -12,6 +12,7 @@ import (
 
 	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/bpsbridge"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
@@ -218,6 +219,16 @@ func (e *BPSExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexe
 	defer prepareDone()
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 	nativeModel := bpsbridge.NativeModel(baseModel)
+	modelInfo, resolved := coreauth.ResolvedModelInfo(req)
+	for _, model := range registry.GetGlobalRegistry().GetModelsForClient(auth.ID) {
+		if !resolved && model != nil && (model.ID == baseModel || model.MetadataModelID == nativeModel) {
+			modelInfo = model
+			break
+		}
+	}
+	if modelInfo != nil && modelInfo.Thinking != nil {
+		options.EffortLevels = modelInfo.Thinking.Levels
+	}
 	from := opts.SourceFormat
 	if from == "" {
 		from = req.Format
@@ -238,7 +249,7 @@ func (e *BPSExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexe
 	// Default rules must recognize the caller's restored fields as explicit.
 	original := doc.Bytes()
 	_ = doc.Set("model", nativeModel)
-	if errThinking := helps.ApplyRequestThinkingDoc(doc, req, opts, from.String(), sdktranslator.FormatCodex.String(), e.Identifier(), translated.ConfigurationUpdatesChanged); errThinking != nil {
+	if errThinking := helps.ApplyBPSRequestThinkingDoc(doc, req, opts, from.String(), modelInfo, translated.ConfigurationUpdatesChanged); errThinking != nil {
 		return nil, nil, errThinking
 	}
 	caller, _ := opts.Metadata[coreexecutor.CallerScopeMetadataKey].(string)

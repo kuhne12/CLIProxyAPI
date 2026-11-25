@@ -72,3 +72,19 @@ func TestHasAuthModelProviderDoesNotRunDiscovery(t *testing.T) {
 		t.Fatal("nil host claims model ownership")
 	}
 }
+
+func TestAuthModelDiscoveryPreservesCredentialProxyForRPCCallbacks(t *testing.T) {
+	host := newHostWithRecords(capabilityRecord{id: "bps", plugin: pluginapi.Plugin{Capabilities: pluginapi.Capabilities{
+		AuthProvider: fakeAuthProvider{identifier: "bps"},
+		ModelProvider: modelProviderFunc{modelsForAuth: func(ctx context.Context, req pluginapi.AuthModelRequest) (pluginapi.ModelResponse, error) {
+			if oauthProxyURLFromContext(ctx) != "socks5://127.0.0.1:19080" || req.HTTPClient == nil {
+				t.Fatal("discovery lost credential transport")
+			}
+			return pluginapi.ModelResponse{Provider: "bps"}, nil
+		}},
+	}}})
+	result := host.ModelsForAuth(t.Context(), &coreauth.Auth{ID: "a", Provider: "bps", ProxyURL: "socks5://127.0.0.1:19080"})
+	if !result.Handled || result.Err != nil {
+		t.Fatal("model discovery was not handled", result.Err)
+	}
+}

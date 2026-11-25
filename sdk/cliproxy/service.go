@@ -120,6 +120,9 @@ type Service struct {
 	// copilotCatalogs owns provider-local discovery; protected by cfgMu.
 	copilotCatalogs *copilotCatalogRefresher
 
+	// bpsCatalogs periodically refreshes account model discovery; protected by cfgMu.
+	bpsCatalogs *bpsCatalogRefresher
+
 	// cooldownStateStore persists runtime cooldown state when enabled.
 	cooldownStateStore coreauth.CooldownStateStore
 

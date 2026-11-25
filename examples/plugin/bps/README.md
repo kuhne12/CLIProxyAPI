@@ -174,7 +174,18 @@ routes and the matching CPA build executes BPS WebSocket requests using the
 bps-local request/tool/stream adapter. Existing `type: bps` files work directly;
 no credential relabeling, new login, or standalone bridge is needed.
 
-Use `gpt-6-astra`, `gpt-6-sol`, `gpt-6.2-astra`, or `gpt-6.2-sol`.
+From 0.5.7, each BPS credential discovers its model IDs, labels, and reasoning
+levels from the authenticated upstream `model_catalog` at
+`/basispoints/api/responses/access?include_models=true`. There is no fixed model list.
+Discovery runs at credential registration and on a five-minute background refresh
+in standalone CPA mode. A one-minute, credential-scoped memory cache coalesces
+duplicate registration calls. Inference does not wait for model discovery.
+Temporary network errors, 429/5xx responses, and malformed catalogs preserve the
+last successfully registered models for that process. A first-start failure
+publishes no models until a later retry succeeds. HTTP 401/403, `allowed:false`,
+and an explicitly empty catalog remove the credential's models. Entries in
+`restricted_models` are excluded. No static list is used as an outage fallback.
+The settings page also reads model suggestions from the registered credentials.
 From plugin 0.3.1, model IDs match the upstream GPT IDs without a provider prefix.
 If another provider offers the same ID, CPA uses its normal credential routing.
 Select the BPS credential explicitly for provider-specific verification.

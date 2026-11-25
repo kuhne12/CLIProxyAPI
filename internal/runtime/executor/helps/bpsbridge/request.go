@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 
@@ -108,6 +109,8 @@ type PrepareOptions struct {
 	UpstreamTaskID string
 	UpstreamTurnID string
 	AgentIteration int // Optional count from the original, untrimmed input.
+	// EffortLevels is the selected credential's discovered reasoning catalog.
+	EffortLevels []string
 }
 
 func validUpstreamIdentity(value string) bool {
@@ -183,6 +186,13 @@ func PrepareWithOptions(raw []byte, scope string, replay *ReplayCache, options P
 		}
 	}
 	effort, err := NormalizeEffortForModel(model, requested)
+	if len(options.EffortLevels) > 0 {
+		if declared := strings.ToLower(strings.TrimSpace(requested)); slices.Contains(options.EffortLevels, declared) {
+			effort, err = declared, nil
+		} else if err == nil && !slices.Contains(options.EffortLevels, effort) {
+			err = fmt.Errorf("basispoints reasoning effort %q is not advertised for %s", requested, model)
+		}
+	}
 	if err != nil {
 		return nil, nil, err
 	}

@@ -38,7 +38,7 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 	}
 	t.Chdir(dir)
 	host := New()
-	client, errOpen := (dynamicLibraryLoader{}).Open(pluginFile{ID: "bps", Path: pluginPath, Version: "0.5.6"}, host)
+	client, errOpen := (dynamicLibraryLoader{}).Open(pluginFile{ID: "bps", Path: pluginPath, Version: "0.5.7"}, host)
 	if errOpen != nil {
 		t.Fatal(errOpen)
 	}
@@ -48,7 +48,7 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 		t.Fatal(errRegister)
 	}
 	fields := plugin.Metadata.ConfigFields
-	if plugin.Metadata.Version != "0.5.6" || len(fields) != 3 || fields[0].Name != "cache-creation-as-input" || fields[0].Type != pluginapi.ConfigFieldTypeBoolean || fields[0].Default != false || fields[1].Name != "quota-model-prices" || fields[1].Type != pluginapi.ConfigFieldTypeObject || fields[2].Name != "image-relay-origin" || fields[2].Type != pluginapi.ConfigFieldTypeString {
+	if plugin.Metadata.Version != "0.5.7" || len(fields) != 3 || fields[0].Name != "cache-creation-as-input" || fields[0].Type != pluginapi.ConfigFieldTypeBoolean || fields[0].Default != false || fields[1].Name != "quota-model-prices" || fields[1].Type != pluginapi.ConfigFieldTypeObject || fields[2].Name != "image-relay-origin" || fields[2].Type != pluginapi.ConfigFieldTypeString {
 		t.Fatal("BPS downstream accounting configuration unavailable across C ABI")
 	}
 	if plugin.Capabilities.AuthProvider == nil || plugin.Capabilities.AuthProvider.Identifier() != "bps" || plugin.Capabilities.CommandLinePlugin == nil {
@@ -150,8 +150,17 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 	if plugin.Capabilities.ModelProvider == nil {
 		t.Fatal("BPS model provider unavailable across C ABI")
 	}
-	models, errModels := plugin.Capabilities.ModelProvider.ModelsForAuth(context.Background(), pluginapi.AuthModelRequest{AuthProvider: "bps"})
-	if errModels != nil || models.Provider != "bps" || len(models.Models) != 4 || models.Models[0].ID != "gpt-6-astra" {
+	modelCalls := 0
+	modelCtx := context.WithValue(context.Background(), "cliproxy.roundtripper", bpsQuotaRoundTripper(func(req *http.Request) (*http.Response, error) {
+		modelCalls++
+		if req.Method != http.MethodGet || req.URL.String() != "https://bps.openai.com/basispoints/api/responses/access?include_models=true" || req.Header.Get("Authorization") != "Bearer model-test" || req.Header.Get("ChatGPT-Account-Id") != "model-account" {
+			t.Error("BPS model callback lost credential scope or endpoint")
+		}
+		body := `{"allowed":true,"model_catalog":{"models":[{"id":"gpt-5.6-sol","efforts":[{"value":"none"},{"value":"low"}]},{"id":"gpt-6.1-sol"},{"id":"future-bps-model"}],"restricted_models":[]}}`
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+	}))
+	models, errModels := plugin.Capabilities.ModelProvider.ModelsForAuth(modelCtx, pluginapi.AuthModelRequest{AuthProvider: "bps", AuthID: "model-account", Metadata: map[string]any{"access_token": "model-test", "account_id": "model-account"}})
+	if errModels != nil || models.Provider != "bps" || len(models.Models) != 3 || models.Models[0].ID != "gpt-5.6-sol" || models.Models[1].ID != "gpt-6.1-sol" || models.Models[2].ID != "future-bps-model" || modelCalls != 1 {
 		t.Fatalf("BPS credential model discovery failed: %v, models=%v", errModels, models.Models)
 	}
 	start, handledStart, errStart := host.StartLogin(context.Background(), "bps", "http://127.0.0.1:8317/v8/management/oauth/callback")

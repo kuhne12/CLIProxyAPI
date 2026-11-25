@@ -11,7 +11,7 @@ The `test-and-deploy` workflow tests a pushed `main` commit, then runs
 2. Backs up config, Compose files, `.env`, the previous BPS binary, and image ID.
 3. Verifies the customized panel SHA256 and builds an immutable image from the tested commit before replacing the service.
 4. Checks that resolved ports, mounts, environment, and networks are unchanged.
-5. Installs `bps-v0.5.6.so` and enables it in the existing config. Older versioned
+5. Installs `bps-v0.5.7.so` and enables it in the existing config. Older versioned
    libraries remain available for rollback; the loader selects the newest version.
 6. Sets `management.disable-auto-update-panel` so upstream updates cannot replace the customized panel.
 7. Recreates only CPA, checks `/healthz`, BPS registration and the served panel SHA256, then saves the new

@@ -341,3 +341,28 @@ func TestBPSExecutorRestoresDeclaredClientTool(t *testing.T) {
 		t.Fatalf("native tool was not translated: %s", result.Payload)
 	}
 }
+
+func TestBPSExecutorPreservesDiscoveredNoneEffort(t *testing.T) {
+	for _, publishedID := range []string{"gpt-5.6-sol", "team/fast-sol"} {
+		t.Run(publishedID, func(t *testing.T) {
+			auth := bpsFixtureAuth()
+			auth.ID = t.Name()
+			reg := registry.GetGlobalRegistry()
+			reg.RegisterClient(auth.ID, "bps", []*registry.ModelInfo{{ID: publishedID, MetadataModelID: "gpt-5.6-sol", Type: "bps", Thinking: &registry.ThinkingSupport{ZeroAllowed: true, Levels: []string{"none", "low", "medium", "high", "xhigh"}}}})
+			defer reg.UnregisterClient(auth.ID)
+			e, _ := newBPSFixture(t, []string{bpsCompletedFixture}, func(raw []byte) {
+				if got := ojson.GetBytes(raw, "reasoning_effort").String(); got != "none" {
+					t.Errorf("discovered none effort became %q", got)
+				}
+				if got := ojson.GetBytes(raw, "model").String(); got != "gpt-5.6-sol" {
+					t.Errorf("model became %q", got)
+				}
+			})
+			payload := []byte(`{"model":"gpt-5.6-sol","input":"Say BPS_OK","reasoning":{"effort":"none"}}`)
+			req := coreexecutor.Request{Model: "gpt-5.6-sol", Format: sdktranslator.FormatOpenAIResponse, Payload: payload}
+			if _, err := e.Execute(t.Context(), auth, req, coreexecutor.Options{SourceFormat: req.Format, OriginalRequest: payload}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

@@ -287,12 +287,7 @@
                 spellcheck="false"
                 placeholder="gpt-6.2-astra"
             /></label>
-            <datalist id="models">
-              <option>gpt-6.2-astra</option>
-              <option>gpt-6.2-sol</option>
-              <option>gpt-6-astra</option>
-              <option>gpt-6-sol</option>
-            </datalist>
+            <datalist id="models"></datalist>
             <h3 class="group">单价 · USD / 百万 Token</h3>
             <div class="grid" id="rates"></div>
             <details id="advanced">
@@ -446,6 +441,40 @@
         el("login").hidden = true;
         el("settings").hidden = el("reload").hidden = false;
         notice("");
+        await loadModelSuggestions();
+      }
+      async function loadModelSuggestions() {
+        const ids = new Set(Object.keys(prices));
+        const read = async (path) => {
+          const url = new URL("../../../../v8/management/" + path, location.href);
+          const response = await fetch(url, {
+            headers: { Authorization: "Bearer " + key },
+            mode: "same-origin",
+            redirect: "error",
+            cache: "no-store",
+          });
+          if (!response.ok) throw Error("模型目录读取失败（HTTP " + response.status + "）。");
+          return response.json();
+        };
+        try {
+          const credentials = await read("credentials");
+          for (const credential of credentials.files || []) {
+            if (credential.provider !== "bps" || credential.disabled) continue;
+            const catalog = await read("credentials/models?name=" + encodeURIComponent(credential.name));
+            for (const model of catalog.models || []) {
+              if (typeof model.id === "string" && model.id) ids.add(model.id);
+            }
+          }
+        } catch {
+          notice("模型建议暂不可用，仍可手动输入模型 ID。", true);
+        }
+        el("models").replaceChildren(
+          ...[...ids].sort().map((id) => {
+            const option = document.createElement("option");
+            option.value = id;
+            return option;
+          }),
+        );
       }
       function makeFields(fields, container) {
         for (const [name, caption] of fields) {

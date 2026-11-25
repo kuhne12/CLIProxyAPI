@@ -33,6 +33,13 @@ COPY --from=builder /app/bps.so /opt/cliproxy-plugins/bps.so
 
 COPY config.example.yaml /CLIProxyAPI/config.example.yaml
 
+# CI builds and verifies the customized panel before production deployment.
+# Source-only Docker builds retain the upstream automatic panel bootstrap.
+COPY management-ui /opt/cpa-management
+RUN mkdir -p /CLIProxyAPI/static && \
+    if test -f /opt/cpa-management/management.html; then cp /opt/cpa-management/management.html /CLIProxyAPI/static/management.html; fi && \
+    rm -rf /opt/cpa-management
+
 WORKDIR /CLIProxyAPI
 
 EXPOSE 8317

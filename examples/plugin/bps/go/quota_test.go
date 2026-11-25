@@ -62,12 +62,18 @@ func TestBPSQuotaUsesHostTransportAndAccount(t *testing.T) {
 	quota, err := fetchBPSQuota(quotaFixtureRequest(), func(method string, raw []byte) ([]byte, error) {
 		calls++
 		var request quotaHTTPRequest
-		if json.Unmarshal(raw, &request) != nil || method != pluginabi.MethodHostHTTPDo || request.Method != "GET" || request.URL != bpsQuotaURL || request.HostCallbackID != "fixture-callback" || request.Headers.Get("Authorization") != "Bearer fixture-token" || request.Headers.Get("ChatGPT-Account-Id") != "fixture-account" {
+		if json.Unmarshal(raw, &request) != nil || method != pluginabi.MethodHostHTTPDo || request.Method != "GET" || (request.URL != bpsQuotaURL && request.URL != bpsResetCreditsURL) || request.HostCallbackID != "fixture-callback" || request.Headers.Get("Authorization") != "Bearer fixture-token" || request.Headers.Get("ChatGPT-Account-Id") != "fixture-account" {
 			t.Fatal("quota request lost its host context or account scope")
+		}
+		if request.URL == bpsResetCreditsURL {
+			if request.Headers.Get("OpenAI-Beta") != "codex-1" || request.Headers.Get("Originator") != "Codex Desktop" {
+				t.Fatal("reset credits request lost Codex headers")
+			}
+			return okEnvelope(pluginapi.HTTPResponse{StatusCode: 200, Body: []byte(`{"available_count":3}`)})
 		}
 		return okEnvelope(pluginapi.HTTPResponse{StatusCode: 200, Body: []byte(`{"rate_limit":{"primary_window":{"used_percent":20}},"credits":{"balance":null}}`)})
 	})
-	if err != nil || calls != 1 || len(quota.Groups) != 1 || quota.Groups[0].Buckets[0].RemainingFraction != 0.8 {
+	if err != nil || calls != 2 || len(quota.Groups) != 1 || quota.Groups[0].Buckets[0].RemainingFraction != 0.8 || len(quota.Summary) != 1 || quota.Summary[0].Key != bpsResetCreditsMetric || quota.Summary[0].Value != 3 {
 		t.Fatalf("quota fetch failed: %+v, %v, calls=%d", quota, err, calls)
 	}
 }

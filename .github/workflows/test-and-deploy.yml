@@ -32,6 +32,21 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+
+      - name: Build and verify management panel
+        run: bash management-ui/build.sh management-ui/management.html
+
+      - name: Upload verified panel
+        uses: actions/upload-artifact@v4
+        with:
+          name: bps-management-panel
+          path: management-ui/management.html
+          if-no-files-found: error
+
       - name: Run tests
         env:
           CGO_ENABLED: "1"
@@ -62,13 +77,25 @@ jobs:
       - name: Checkout deployment script
         uses: actions/checkout@v4
 
+      - name: Download verified panel
+        uses: actions/download-artifact@v4
+        with:
+          name: bps-management-panel
+          path: management-ui
+
       - name: Update and restart server
         env:
           DEPLOY_COMMIT: ${{ github.sha }}
         run: |
+          management_sha=$(sha256sum management-ui/management.html | cut -d ' ' -f 1)
+          incoming="/home/fkh/.cpa-backups/panel-$DEPLOY_COMMIT"
+          ssh -i "$HOME/.ssh/cliproxyapi_deploy" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" "install -m 700 -d '$incoming'"
+          scp -i "$HOME/.ssh/cliproxyapi_deploy" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            management-ui/management.html "$DEPLOY_USER@$DEPLOY_HOST:$incoming/management.html"
           ssh -i "$HOME/.ssh/cliproxyapi_deploy" \
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            "bash -s -- '$DEPLOY_PATH' '$DEPLOY_COMMIT'" \
+            "bash -s -- '$DEPLOY_PATH' '$DEPLOY_COMMIT' '$incoming/management.html' '$management_sha'" \
             < .github/scripts/deploy-production.sh

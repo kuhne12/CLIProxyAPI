@@ -5,6 +5,11 @@ umask 077
 
 repo=${1:?repository path required}
 revision=${2:?tested commit required}
+management_asset=${3:?verified management HTML required}
+management_sha=${4:?management HTML SHA256 required}
+[[ "$management_sha" =~ ^[0-9a-f]{64}$ ]]
+test -s "$management_asset"
+test "$(sha256sum "$management_asset" | cut -d ' ' -f 1)" = "$management_sha"
 backup_root=${CPA_BACKUP_ROOT:-/home/fkh/.cpa-backups}
 mkdir -p "$backup_root"
 exec 9>"$backup_root/production-deploy.lock"
@@ -39,6 +44,7 @@ printf '%s\n' "$rollback_image" > "$backup/rollback-image"
 
 mkdir "$backup/source"
 git archive "$target" | tar -x -C "$backup/source"
+install -m 644 "$management_asset" "$backup/source/management-ui/management.html"
 image="local/cli-proxy-api:bps-${target:0:12}"
 version=$(cat "$backup/source/.github/upstream-version")
 [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
@@ -63,7 +69,7 @@ print(matches[0])
 PY
 )
 architecture=$(docker image inspect "$image" --format '{{.Architecture}}')
-plugin="$plugin_dir/linux/$architecture/bps-v0.5.4.so"
+plugin="$plugin_dir/linux/$architecture/bps-v0.5.5.so"
 mkdir -p "$(dirname "$plugin")"
 if test -f "$plugin"; then cp -p "$plugin" "$backup/previous-bps.so"; fi
 
@@ -139,6 +145,28 @@ if not plugins.get('enabled') or not configs.get('bps', {}).get('enabled'):
     p.chmod(0o600)
 PY
 
+# The panel now ships with the tested CPA image; upstream's independent updater
+# must not replace this build with a panel that lacks the BPS controls.
+python3 - config.yaml <<'PANELPY'
+import pathlib, sys, yaml
+p = pathlib.Path(sys.argv[1])
+raw = p.read_text()
+expected = yaml.safe_load(raw)
+expected.setdefault('management', {})['disable-auto-update-panel'] = True
+lines = raw.splitlines(keepends=True)
+start = next(i for i, line in enumerate(lines) if line.rstrip() == 'management:')
+end = next((i for i in range(start + 1, len(lines)) if lines[i].strip() and not lines[i].startswith((' ', '\t', '#'))), len(lines))
+setting = next((i for i in range(start + 1, end) if lines[i].strip().startswith('disable-auto-update-panel:')), None)
+if setting is None:
+    lines.insert(start + 1, '  disable-auto-update-panel: true\n')
+else:
+    lines[setting] = '  disable-auto-update-panel: true\n'
+updated = ''.join(lines)
+assert yaml.safe_load(updated) == expected
+p.write_text(updated)
+p.chmod(0o600)
+PANELPY
+
 docker compose up -d --no-build --pull never --no-deps cli-proxy-api
 healthy=0
 for _ in $(seq 1 30); do
@@ -149,6 +177,7 @@ for _ in $(seq 1 30); do
   sleep 2
 done
 test "$healthy" = 1
+test "$(curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8317/management.html | sha256sum | cut -d ' ' -f 1)" = "$management_sha"
 docker logs cli-proxy-api 2>&1 | grep -F 'plugin registered plugin_id=bps ' >/dev/null
 
 # Persist the selected local image for future compose up/restart commands.

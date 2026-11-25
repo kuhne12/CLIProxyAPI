@@ -49,7 +49,7 @@ func handleMethod(method string, raw []byte) ([]byte, error) {
 		}
 		return okEnvelope(map[string]any{
 			"schema_version": pluginabi.SchemaVersion,
-			"metadata": pluginapi.Metadata{Name: "bps", Version: "0.5.4", Author: "CLIProxyAPI contributors",
+			"metadata": pluginapi.Metadata{Name: "bps", Version: "0.5.5", Author: "CLIProxyAPI contributors",
 				GitHubRepository: "https://github.com/router-for-me/CLIProxyAPI", ConfigFields: []pluginapi.ConfigField{{
 					Name: "cache-creation-as-input", Type: pluginapi.ConfigFieldTypeBoolean, Default: false,
 					Description: "Report BPS cache creation as regular input to downstream clients. Total input and cache reads stay unchanged; CPA retains original upstream usage. Requires the matching CPA BPS executor.",
@@ -89,7 +89,7 @@ func handleMethod(method string, raw []byte) ([]byte, error) {
 	case pluginabi.MethodAuthIdentifier, pluginabi.MethodQuotaIdentifier:
 		return okEnvelope(map[string]string{"identifier": "bps"})
 	case pluginabi.MethodQuotaDescribe:
-		return okEnvelope(pluginapi.QuotaDescribeResponse{SupportedProviders: []string{"bps"}, DisplayName: "BPS"})
+		return okEnvelope(pluginapi.QuotaDescribeResponse{SupportedProviders: []string{"bps"}, DisplayName: "BPS", SupportsReset: true})
 	case pluginabi.MethodQuotaFetch:
 		return dispatch(raw, func(req quotaFetchRequest) (pluginapi.QuotaFetchResponse, error) {
 			quota, errQuota := fetchBPSQuota(req, callHostAPI)
@@ -99,7 +99,9 @@ func handleMethod(method string, raw []byte) ([]byte, error) {
 			return quota, errQuota
 		})
 	case pluginabi.MethodQuotaReset:
-		return okEnvelope(pluginapi.QuotaResetResponse{Success: false, Message: "BPS account quota cannot be reset manually"})
+		return dispatch(raw, func(req quotaResetRequest) (pluginapi.QuotaResetResponse, error) {
+			return resetBPSQuota(req, callHostAPI)
+		})
 	case pluginabi.MethodAuthLoginStart:
 		return dispatch(raw, func(req pluginapi.AuthLoginStartRequest) (pluginapi.AuthLoginStartResponse, error) {
 			return authProvider.StartLogin(ctx, req)

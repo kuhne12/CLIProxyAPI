@@ -2,7 +2,6 @@ package kimi
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
 	"os"
@@ -12,7 +11,8 @@ import (
 	"testing"
 	"time"
 
-	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	"github.com/MoeForge/moego/json"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 )
 
 func TestKimiDomainResolution(t *testing.T) {

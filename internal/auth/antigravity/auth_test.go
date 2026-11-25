@@ -4,8 +4,10 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)
@@ -14,9 +16,23 @@ func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
 
+func TestBuildAuthURLIncludesAICodeScope(t *testing.T) {
+	parsedURL, err := url.Parse(NewAntigravityAuth(nil, nil).BuildAuthURL("state", "http://localhost/callback"))
+	if err != nil {
+		t.Fatalf("parse auth URL: %v", err)
+	}
+
+	for _, scope := range strings.Fields(parsedURL.Query().Get("scope")) {
+		if scope == "https://www.googleapis.com/auth/aicode" {
+			return
+		}
+	}
+	t.Fatalf("authorization URL scope does not include %q", "https://www.googleapis.com/auth/aicode")
+}
+
 func TestFetchProjectIDFromLoadCodeAssist(t *testing.T) {
 	auth := NewAntigravityAuth(nil, &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.String() != "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist" {
+		if req.URL.String() != "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist" {
 			t.Fatalf("unexpected request URL: %s", req.URL.String())
 		}
 		assertLoadCodeAssistHeaders(t, req)
@@ -37,7 +53,7 @@ func TestFetchProjectIDFallsBackToDailyOnboardUser(t *testing.T) {
 	var sawOnboard bool
 	auth := NewAntigravityAuth(nil, &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		switch req.URL.String() {
-		case "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist":
+		case "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist":
 			assertLoadCodeAssistHeaders(t, req)
 			return jsonResponse(`{"allowedTiers":[{"id":"free-tier","isDefault":true}]}`), nil
 		case "https://daily-cloudcode-pa.googleapis.com/v1internal:onboardUser":
@@ -100,8 +116,8 @@ func assertLoadCodeAssistHeaders(t *testing.T, req *http.Request) {
 	if got := req.Header.Get("Authorization"); got != "Bearer access-token" {
 		t.Fatalf("Authorization = %q", got)
 	}
-	if got := req.Header.Get("Accept"); got != "*/*" {
-		t.Fatalf("Accept = %q", got)
+	if got := req.Header.Get("Accept"); got != "" {
+		t.Fatalf("Accept = %q, want omitted", got)
 	}
 	if got := req.Header.Get("X-Goog-Api-Client"); got != "" {
 		t.Fatalf("X-Goog-Api-Client = %q, want empty", got)
@@ -153,5 +169,32 @@ func jsonResponse(body string) *http.Response {
 		StatusCode: http.StatusOK,
 		Header:     make(http.Header),
 		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}
+
+func TestFetchProjectIDTooManyRequestsPreservesRetryAfter(t *testing.T) {
+	auth := NewAntigravityAuth(nil, &http.Client{Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		header := make(http.Header)
+		header.Set("Retry-After", "45")
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Header:     header,
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"code":429,"message":"rate limited"}}`)),
+		}, nil
+	})})
+
+	_, err := auth.FetchProjectID(context.Background(), "access-token")
+	if err == nil {
+		t.Fatalf("expected error from 429 response")
+	}
+	type retryAfterProvider interface {
+		RetryAfter() *time.Duration
+	}
+	rap, ok := err.(retryAfterProvider)
+	if !ok {
+		t.Fatalf("expected error to expose RetryAfter, got %T (%v)", err, err)
+	}
+	if got := rap.RetryAfter(); got == nil || *got != 45*time.Second {
+		t.Fatalf("RetryAfter() = %v, want 45s", got)
 	}
 }

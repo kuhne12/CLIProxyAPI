@@ -4,8 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,8 +16,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MoeForge/moego/base64"
+	"github.com/MoeForge/moego/json"
+
 	"github.com/gin-gonic/gin"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 )
 
 const (
@@ -297,7 +298,7 @@ func (h *Handler) GetRequestLogByID(c *gin.Context) {
 		return
 	}
 
-	suffix := "-" + requestID + ".log"
+	suffix := "-" + logging.ShortRequestID(requestID) + ".log"
 	var matchedFile string
 	var latestModTime time.Time
 	for _, entry := range entries {

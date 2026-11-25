@@ -2,12 +2,12 @@ package management
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"testing"
 
-	metaauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/meta"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/MoeForge/moego/json"
+	metaauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/meta"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 )
 
 func TestBuildMetaAuthRecord_PreservesSubscriptionMetadata_Issue6117(t *testing.T) {

@@ -6,6 +6,12 @@ OAuth code adapted from:
   Source files: internal/auth/device.go, internal/auth/renew.go,
                 internal/auth/auth.go
 
+Browser authorization parameters and callback validation adapted from:
+  Commit: c66fb41006baf7ede70af69a3e2f81af6a6c246b
+  Source file: internal/auth/browser.go
+  Browser interception/automation is not included. Users submit callback URLs
+  through CPA's existing callback endpoint or paste them into the CLI.
+
 The upstream LICENSE is reproduced unchanged as LICENSE.upstream. It contains
 the baseline Unlicense and collected component-specific notices. This plugin
 does not copy the upstream internal/basispoints inference implementation.

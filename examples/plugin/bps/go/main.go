@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -45,7 +46,7 @@ func handleMethod(method string, raw []byte) ([]byte, error) {
 		}
 		return okEnvelope(map[string]any{
 			"schema_version": pluginabi.SchemaVersion,
-			"metadata": pluginapi.Metadata{Name: "bps", Version: "0.1.0", Author: "CLIProxyAPI contributors",
+			"metadata": pluginapi.Metadata{Name: "bps", Version: "0.2.0", Author: "CLIProxyAPI contributors",
 				GitHubRepository: "https://github.com/router-for-me/CLIProxyAPI", ConfigFields: []pluginapi.ConfigField{}},
 			"capabilities": map[string]bool{"auth_provider": true, "command_line_plugin": true},
 		})
@@ -72,7 +73,8 @@ func handleMethod(method string, raw []byte) ([]byte, error) {
 		})
 	case pluginabi.MethodCommandLineRegister:
 		return okEnvelope(pluginapi.CommandLineRegistrationResponse{Flags: []pluginapi.CommandLineFlag{
-			{Name: "bps-login", Type: "bool", Usage: "Log in to BPS using an independent device authorization"},
+			{Name: "bps-login", Type: "bool", Usage: "Log in to BPS using a browser authorization URL and pasted callback"},
+			{Name: "bps-login-method", Type: "string", Usage: "BPS login method: browser (default) or device"},
 			{Name: "bps-import", Type: "string", Usage: "Import an independent BPS OAuth JSON file"},
 		}})
 	case pluginabi.MethodCommandLineExecute:
@@ -116,10 +118,18 @@ func errorEnvelope(code, message string) []byte {
 }
 
 func runCommand(ctx context.Context, auth *bpsauth.Provider, req pluginapi.CommandLineExecutionRequest, output io.Writer) (pluginapi.CommandLineExecutionResponse, error) {
+	return runCommandWithInput(ctx, auth, req, os.Stdin, output)
+}
+
+func runCommandWithInput(ctx context.Context, auth *bpsauth.Provider, req pluginapi.CommandLineExecutionRequest, input io.Reader, output io.Writer) (pluginapi.CommandLineExecutionResponse, error) {
 	login := req.Flags["bps-login"].Value == "true"
 	path := strings.TrimSpace(req.Flags["bps-import"].Value)
+	method := strings.TrimSpace(req.Flags["bps-login-method"].Value)
 	if login == (path != "") {
 		return pluginapi.CommandLineExecutionResponse{}, errors.New("choose exactly one of --bps-login or --bps-import")
+	}
+	if method != "" && (!login || (method != "browser" && method != "device")) {
+		return pluginapi.CommandLineExecutionResponse{}, errors.New("--bps-login-method requires --bps-login and must be browser or device")
 	}
 	var record pluginapi.AuthData
 	if path != "" {
@@ -145,13 +155,19 @@ func runCommand(ctx context.Context, auth *bpsauth.Provider, req pluginapi.Comma
 		}
 		record = parsed.Auth
 	} else {
-		start, errStart := auth.StartLogin(ctx, pluginapi.AuthLoginStartRequest{Provider: "bps", Host: req.Host})
+		start, errStart := auth.StartLogin(ctx, pluginapi.AuthLoginStartRequest{Provider: "bps", Host: req.Host, Metadata: map[string]any{"method": method}})
 		if errStart != nil {
 			return pluginapi.CommandLineExecutionResponse{}, errStart
 		}
-		// CommandLineExecutionResponse.Stdout is delayed until completion, so the
-		// device prompt must be written now while the user can still authorize.
-		if _, errWrite := fmt.Fprintf(output, "Open: %s\nDevice code: %s\nComplete BPS authorization in your browser. Waiting up to 15 minutes...\n", start.URL, start.UserCode); errWrite != nil {
+		// CommandLineExecutionResponse.Stdout is delayed until completion.
+		if _, errWrite := fmt.Fprintf(output, "Open: %s\n", start.URL); errWrite != nil {
+			return pluginapi.CommandLineExecutionResponse{}, errWrite
+		}
+		prompt := "Complete BPS login in your browser, then copy the full callback URL from the address bar."
+		if start.UserCode != "" {
+			prompt = "Device code: " + start.UserCode + "\nComplete BPS authorization in your browser. Waiting up to 15 minutes..."
+		}
+		if _, errWrite := fmt.Fprintln(output, prompt); errWrite != nil {
 			return pluginapi.CommandLineExecutionResponse{}, errWrite
 		}
 		if req.Flags["no-browser"].Value != "true" {
@@ -161,15 +177,28 @@ func runCommand(ctx context.Context, auth *bpsauth.Provider, req pluginapi.Comma
 		}
 		ctx, cancel := context.WithDeadline(ctx, start.ExpiresAt)
 		defer cancel()
+		var metadata map[string]any
+		if start.UserCode == "" {
+			if _, errWrite := fmt.Fprintln(output, "Paste the callback URL here (within 15 minutes):"); errWrite != nil {
+				return pluginapi.CommandLineExecutionResponse{}, errWrite
+			}
+			callback, errRead := readBrowserCallback(ctx, input)
+			if errRead != nil {
+				return pluginapi.CommandLineExecutionResponse{}, errRead
+			}
+			metadata = map[string]any{"redirect_url": callback}
+		}
 		ticker := time.NewTicker(time.Duration(start.Interval) * time.Second)
 		defer ticker.Stop()
 		for record.Provider == "" {
-			select {
-			case <-ctx.Done():
-				return pluginapi.CommandLineExecutionResponse{}, ctx.Err()
-			case <-ticker.C:
+			if start.UserCode != "" {
+				select {
+				case <-ctx.Done():
+					return pluginapi.CommandLineExecutionResponse{}, ctx.Err()
+				case <-ticker.C:
+				}
 			}
-			polled, errPoll := auth.PollLogin(ctx, pluginapi.AuthLoginPollRequest{Provider: "bps", State: start.State, Host: req.Host})
+			polled, errPoll := auth.PollLogin(ctx, pluginapi.AuthLoginPollRequest{Provider: "bps", State: start.State, Host: req.Host, Metadata: metadata})
 			if errPoll != nil {
 				return pluginapi.CommandLineExecutionResponse{}, errPoll
 			}
@@ -180,6 +209,28 @@ func runCommand(ctx context.Context, auth *bpsauth.Provider, req pluginapi.Comma
 	}
 	return pluginapi.CommandLineExecutionResponse{Auths: []pluginapi.AuthData{record},
 		Stdout: []byte("BPS OAuth grant acquired. Generation permission is not yet verified.\n")}, nil
+}
+
+func readBrowserCallback(ctx context.Context, input io.Reader) (string, error) {
+	type result struct {
+		value string
+		err   error
+	}
+	read := make(chan result, 1)
+	go func() {
+		line, errRead := bufio.NewReader(io.LimitReader(input, (16<<10)+1)).ReadString('\n')
+		if len(line) > 16<<10 || (errRead != nil && !errors.Is(errRead, io.EOF)) || strings.TrimSpace(line) == "" {
+			read <- result{err: errors.New("cannot read BPS callback URL")}
+			return
+		}
+		read <- result{value: strings.TrimSpace(line)}
+	}()
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case response := <-read:
+		return response.value, response.err
+	}
 }
 
 func openBrowser(ctx context.Context, address string) error {

@@ -2,7 +2,7 @@
 
 [简体中文](README_CN.md)
 
-This Go C ABI plugin adds independent BPS device authorization to CPA. It adapts
+This Go C ABI plugin adds independent BPS browser and device authorization to CPA. It adapts
 the OAuth implementation from [bps-local-public](https://github.com/sunboyzoey/bps-local-public)
 and reuses CPA's plugin loader, command-line flags, credential store, proxy
 configuration, v8 management sessions, and manual credential refresh.
@@ -49,10 +49,16 @@ existing transport helper. No OAuth response bodies or tokens are logged.
 ./bin/cli-proxy-api --config config.yaml --bps-import /absolute/path/oauth.json
 ```
 
-Login immediately prints a URL and device code. Open the URL, enter the code,
-and approve authorization. Omitting `--no-browser` also opens the URL using the
-system browser. The command waits up to 15 minutes; Ctrl+C cancels it. This is
-device authorization, not the separate browser callback flow.
+Browser OAuth is the default. Open the printed URL, sign in and approve access,
+then paste the complete callback URL into the terminal. No device code or
+server-side browser is required. Omitting `--no-browser` attempts to open the
+system browser. The command waits up to 15 minutes; Ctrl+C cancels it.
+
+The BPS client has a fixed registered redirect at
+`https://bps.openai.com/basispoints/extension/360590d7-f8f9-4d88-bf75-0edfe0a4b9f3/auth/callback`.
+It cannot be replaced with a CPA URL. Copy the address containing `code` and
+`state`, even if the callback page shows an error, and submit it only to your CPA.
+Device login remains available with `--bps-login-method device`.
 
 Import reads an existing BPS OAuth JSON file without modifying the source. It
 requires the BPS `client_id` (`app_fnr0pYvVwwFDocDumLG3H2Bp`) and rejects Codex
@@ -73,12 +79,21 @@ the existing management bearer key, not a proxy client API key:
 
 ```sh
 curl -H 'Authorization: Bearer YOUR_MANAGEMENT_KEY' \
-  'http://127.0.0.1:8317/v8/management/oauth/auth-url?provider=bps&method=device'
+  'http://127.0.0.1:8317/v8/management/oauth/auth-url?provider=bps&method=browser'
 ```
 
-The response contains `status`, `url`, `state`, `user_code`, `interval` (seconds),
-and `expires_at`. Display only the URL/code and keep polling with the returned
-state, no more frequently than the interval:
+The response contains `status`, `url`, `state`, `interval` (seconds), and
+`expires_at`, with no `user_code`. Omitting `method` also selects browser login.
+After signing in at `url`, paste the complete callback into the existing CPA API:
+
+```sh
+curl -X POST -H 'Authorization: Bearer YOUR_MANAGEMENT_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{"provider":"bps","redirect_url":"PASTE_FULL_CALLBACK_URL_HERE"}' \
+  'http://127.0.0.1:8317/v8/management/oauth/callback'
+```
+
+Poll with the original state to exchange the code and save the credential:
 
 ```sh
 curl -H 'Authorization: Bearer YOUR_MANAGEMENT_KEY' \
@@ -86,10 +101,12 @@ curl -H 'Authorization: Bearer YOUR_MANAGEMENT_KEY' \
 ```
 
 `wait` means pending, `ok` means credentials have been saved, and `error` means
-the login must be restarted. Polling drives the device flow; no poller runs in
-the background. The plugin enforces polling intervals, including upstream
-`slow_down`, and caches successful exchanges. Concurrent polls save only once.
-Private device IDs, PKCE material, and tokens are never part of these responses.
+the login must be restarted. Polling drives completion; no poller runs in the background. Browser sessions
+use independent state and PKCE, reuse CPA callback files, and never retry a
+possibly consumed authorization code. Explicit `method=device` returns a
+`user_code` and enforces device polling intervals, including `slow_down`.
+Concurrent polls exchange and save only once. Private device IDs, PKCE verifiers,
+and tokens are never part of these responses.
 
 Cancel a pending login:
 
@@ -101,7 +118,7 @@ curl -X DELETE -H 'Authorization: Bearer YOUR_MANAGEMENT_KEY' \
 `cancelled: true` prevents a later in-flight result from being saved. Once a
 successful result has claimed the save, cancellation returns false and the save
 finishes even if the polling client disconnects. Restarting or unloading the
-plugin invalidates pending device sessions.
+plugin invalidates pending login sessions.
 
 List saved credentials and manually refresh one using its returned filename:
 
@@ -132,8 +149,8 @@ coordination.
 - Use the CPA build from this change for v8 device-code response fields. The
   existing management frontend has not been extended with a BPS login button;
   the CLI and documented API are available.
-- Dedicated browser callback authorization, automatic refresh, and a native BPS
-  inference executor are outside this release.
+- Browser login uses manual callback submission; automatic browser callback
+  forwarding, automatic refresh, and native BPS inference remain outside this release.
 
 ## Verification and attribution
 

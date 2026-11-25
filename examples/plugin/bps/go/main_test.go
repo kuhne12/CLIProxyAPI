@@ -54,9 +54,36 @@ func TestPluginRegistrationAndInvalidRequests(t *testing.T) {
 	defer auth.Close()
 	for _, flags := range []map[string]pluginapi.CommandLineFlagValue{
 		{}, {"bps-login": {Value: "true"}, "bps-import": {Value: "file.json"}},
+		{"bps-login": {Value: "true"}, "bps-login-method": {Value: "invalid"}},
+		{"bps-import": {Value: "file.json"}, "bps-login-method": {Value: "browser"}},
 	} {
 		if _, errCLI := runCommand(context.Background(), auth, pluginapi.CommandLineExecutionRequest{Flags: flags}, &bytes.Buffer{}); errCLI == nil {
 			t.Fatal("ambiguous command accepted")
+		}
+	}
+}
+
+func TestCLIBrowserLoginPrintsURLWithoutDeviceCode(t *testing.T) {
+	auth := bpsauth.New()
+	defer auth.Close()
+	var output bytes.Buffer
+	response, err := runCommandWithInput(context.Background(), auth, pluginapi.CommandLineExecutionRequest{Flags: map[string]pluginapi.CommandLineFlagValue{
+		"bps-login": {Value: "true"}, "no-browser": {Value: "true"},
+	}}, strings.NewReader("https://wrong.invalid/callback?code=fixture-secret\n"), &output)
+	if err == nil || len(response.Auths) != 0 {
+		t.Fatal("invalid pasted callback unexpectedly acquired credentials")
+	}
+	if !strings.Contains(output.String(), "https://auth.openai.com/oauth/authorize?") ||
+		!strings.Contains(output.String(), "Paste the callback URL") || strings.Contains(output.String(), "Device code:") ||
+		strings.Contains(output.String()+err.Error(), "fixture-secret") {
+		t.Fatal("browser CLI prompt missing or pasted callback leaked")
+	}
+}
+
+func TestBrowserCallbackInputIsBounded(t *testing.T) {
+	for _, value := range []string{"", "\n", strings.Repeat("x", (16<<10)+1)} {
+		if _, err := readBrowserCallback(context.Background(), strings.NewReader(value)); err == nil {
+			t.Fatal("empty or oversized callback input accepted")
 		}
 	}
 }

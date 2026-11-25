@@ -126,7 +126,7 @@ func (f *oauthFixture) advance(duration time.Duration) { f.now.Add(int64(duratio
 
 func TestDeviceLoginPollingAndConcurrentCompletion(t *testing.T) {
 	f := newFixture(t, "pending")
-	start, err := f.provider.StartLogin(context.Background(), pluginapi.AuthLoginStartRequest{})
+	start, err := f.provider.StartLogin(context.Background(), pluginapi.AuthLoginStartRequest{Metadata: map[string]any{"method": "device"}})
 	if err != nil || start.UserCode != "ABCD-EFGH" || start.Interval != 5 {
 		t.Fatalf("start: code=%q interval=%d err=%v", start.UserCode, start.Interval, err)
 	}
@@ -167,7 +167,7 @@ func TestDeviceFailuresNeverExchangeOrLeakSecrets(t *testing.T) {
 	for _, mode := range []string{"bad_interval", "bad_pkce", "denied", "expired", "cancelled", "shutdown"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newFixture(t, mode)
-			start, err := f.provider.StartLogin(context.Background(), pluginapi.AuthLoginStartRequest{})
+			start, err := f.provider.StartLogin(context.Background(), pluginapi.AuthLoginStartRequest{Metadata: map[string]any{"method": "device"}})
 			if mode != "bad_interval" {
 				if err != nil {
 					t.Fatal(err)
@@ -195,7 +195,7 @@ func TestDeviceFailuresNeverExchangeOrLeakSecrets(t *testing.T) {
 
 func TestSlowDownHonorsIncreasedInterval(t *testing.T) {
 	f := newFixture(t, "slow_down")
-	start, err := f.provider.StartLogin(context.Background(), pluginapi.AuthLoginStartRequest{})
+	start, err := f.provider.StartLogin(context.Background(), pluginapi.AuthLoginStartRequest{Metadata: map[string]any{"method": "device"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,11 +307,11 @@ func TestLoginSessionCapacityAndExpiry(t *testing.T) {
 	for i := range maxSessions {
 		f.provider.sessions[fmt.Sprint(i)] = &loginSession{expires: f.provider.now().Add(loginLifetime), client: &DeviceClient{HTTP: http.DefaultClient}}
 	}
-	if _, err := f.provider.StartLogin(context.Background(), pluginapi.AuthLoginStartRequest{}); err == nil {
+	if _, err := f.provider.StartLogin(context.Background(), pluginapi.AuthLoginStartRequest{Metadata: map[string]any{"method": "device"}}); err == nil {
 		t.Fatal("unbounded login session allocation")
 	}
 	f.advance(loginLifetime)
-	if _, err := f.provider.StartLogin(context.Background(), pluginapi.AuthLoginStartRequest{}); err != nil {
+	if _, err := f.provider.StartLogin(context.Background(), pluginapi.AuthLoginStartRequest{Metadata: map[string]any{"method": "device"}}); err != nil {
 		t.Fatalf("expired sessions were not released: %v", err)
 	}
 }

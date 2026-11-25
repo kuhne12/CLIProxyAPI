@@ -17,6 +17,7 @@ type loginSession struct {
 	mu      sync.Mutex
 	client  *DeviceClient
 	flow    deviceFlow
+	browser *browserFlow
 	expires time.Time
 	next    time.Time
 	result  *pluginapi.AuthData
@@ -47,6 +48,7 @@ func (p *Provider) Close() {
 	defer p.mu.Unlock()
 	for state, session := range p.sessions {
 		session.client.Close()
+		session.browser.cleanup()
 		delete(p.sessions, state)
 	}
 }
@@ -58,14 +60,19 @@ func (p *Provider) requestContext(ctx context.Context, deadline time.Time) (cont
 }
 
 func (p *Provider) StartLogin(ctx context.Context, req pluginapi.AuthLoginStartRequest) (pluginapi.AuthLoginStartResponse, error) {
-	if method, _ := req.Metadata["method"].(string); method != "" && method != "device" {
-		return pluginapi.AuthLoginStartResponse{}, errors.New("BPS plugin supports method=device")
+	method, validMethod := req.Metadata["method"].(string)
+	if raw, exists := req.Metadata["method"]; exists && raw != nil && !validMethod {
+		return pluginapi.AuthLoginStartResponse{}, errors.New("BPS login method must be browser or device")
+	}
+	if method != "" && method != "device" && method != "browser" {
+		return pluginapi.AuthLoginStartResponse{}, errors.New("BPS login method must be browser or device")
 	}
 	now := p.now()
 	p.mu.Lock()
 	for state, session := range p.sessions {
 		if !session.expires.After(now) {
 			session.client.Close()
+			session.browser.cleanup()
 			delete(p.sessions, state)
 		}
 	}
@@ -88,21 +95,38 @@ func (p *Provider) StartLogin(ctx context.Context, req pluginapi.AuthLoginStartR
 	expires := now.Add(loginLifetime)
 	requestCtx, cancel := p.requestContext(ctx, expires)
 	defer cancel()
-	flow, errStart := client.start(requestCtx)
-	if errStart != nil {
+	if errContext := requestCtx.Err(); errContext != nil {
 		client.Close()
-		return pluginapi.AuthLoginStartResponse{}, errStart
+		return pluginapi.AuthLoginStartResponse{}, errContext
 	}
 	state := "bps-" + hex.EncodeToString(nonce[:])
+	session := &loginSession{client: client, expires: expires}
+	response := pluginapi.AuthLoginStartResponse{Provider: "bps", State: state, ExpiresAt: expires}
+	if method == "device" {
+		flow, errStart := client.start(requestCtx)
+		if errStart != nil {
+			client.Close()
+			return pluginapi.AuthLoginStartResponse{}, errStart
+		}
+		session.flow, session.next = flow, p.now().Add(flow.interval)
+		response.URL, response.UserCode, response.Interval = flow.url, flow.code, int(flow.interval/time.Second)
+	} else {
+		flow, errStart := startBrowser(state, req.Host.AuthDir)
+		if errStart != nil {
+			client.Close()
+			return pluginapi.AuthLoginStartResponse{}, errStart
+		}
+		session.browser = flow
+		response.URL, response.Interval = flow.url, 2
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.ctx.Err() != nil {
 		client.Close()
 		return pluginapi.AuthLoginStartResponse{}, context.Canceled
 	}
-	p.sessions[state] = &loginSession{client: client, flow: flow, expires: expires, next: p.now().Add(flow.interval)}
-	return pluginapi.AuthLoginStartResponse{Provider: "bps", State: state, URL: flow.url,
-		UserCode: flow.code, Interval: int(flow.interval / time.Second), ExpiresAt: expires}, nil
+	p.sessions[state] = session
+	return response, nil
 }
 
 func (p *Provider) PollLogin(ctx context.Context, req pluginapi.AuthLoginPollRequest) (pluginapi.AuthLoginPollResponse, error) {
@@ -115,6 +139,7 @@ func (p *Provider) PollLogin(ctx context.Context, req pluginapi.AuthLoginPollReq
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	if !session.expires.After(p.now()) || p.ctx.Err() != nil {
+		session.browser.cleanup()
 		return pluginapi.AuthLoginPollResponse{}, errors.New("BPS login expired or stopped")
 	}
 	if session.err != nil {
@@ -128,8 +153,18 @@ func (p *Provider) PollLogin(ctx context.Context, req pluginapi.AuthLoginPollReq
 	}
 	requestCtx, cancel := p.requestContext(ctx, session.expires)
 	defer cancel()
-	credentials, errPoll := session.client.poll(requestCtx, &session.flow)
-	session.next = p.now().Add(session.flow.interval)
+	var credentials *DeviceCredentials
+	var errPoll error
+	if session.browser != nil {
+		credentials, errPoll = session.client.pollBrowser(requestCtx, session.browser, req.State, req.Metadata)
+	} else {
+		credentials, errPoll = session.client.poll(requestCtx, &session.flow)
+		session.next = p.now().Add(session.flow.interval)
+	}
+	if session.browser != nil && (errPoll != nil || credentials != nil) {
+		session.browser.verifier = ""
+		session.browser.cleanup()
+	}
 	if errPoll != nil {
 		// Do not replay a possibly consumed authorization code after an ambiguous exchange.
 		session.err = errPoll

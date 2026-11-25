@@ -20,7 +20,7 @@ import (
 const ExcelClientID = "app_fnr0pYvVwwFDocDumLG3H2Bp"
 const deviceRedirect = "https://auth.openai.com/basispoints/deviceauth/callback"
 
-// DeviceClient implements the BPS device authorization and token endpoints.
+// DeviceClient implements the BPS browser/device authorization and token endpoints.
 type DeviceClient struct {
 	HTTP *http.Client
 	base string

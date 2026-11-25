@@ -1,6 +1,6 @@
 # BPS 授权插件
 
-复用 [bps-local-public](https://github.com/sunboyzoey/bps-local-public) 的设备码授权和
+复用 [bps-local-public](https://github.com/sunboyzoey/bps-local-public) 的浏览器授权、设备码授权和
 Token 刷新协议，接入 CPA 已有的插件加载、CLI、凭据存储、代理配置、v8 管理会话和手动刷新。
 
 ## 构建与配置
@@ -42,9 +42,19 @@ plugins:
 ./bin/cli-proxy-api --config config.yaml --bps-import /absolute/path/oauth.json
 ```
 
-登录会立即打印授权地址和设备码。打开地址、输入设备码并确认授权后，命令自动保存凭据，
-最长等待 15 分钟；Ctrl+C 取消。省略 `--no-browser` 会自动打开浏览器。
-这仍然是设备码授权，尚未实现独立的浏览器回调登录模式。
+默认使用普通浏览器 OAuth 登录：命令打印登录链接，你在任意电脑的浏览器完成登录和授权，
+再将地址栏中的完整回调链接粘贴回终端，CPA 自动交换并保存凭据，**无需设备授权码**。
+最长等待 15 分钟；Ctrl+C 取消。省略 `--no-browser` 会尝试打开本机浏览器。
+
+BPS 注册的回调地址固定为 `https://bps.openai.com/basispoints/extension/360590d7-f8f9-4d88-bf75-0edfe0a4b9f3/auth/callback`，
+不能替换成 CPA 地址。回调页面即使显示错误，也可复制带 `code` 和 `state` 的完整地址。
+这是手动回传链接，无需在服务器安装浏览器。不要将回调链接发送给他人。
+
+设备码仍可显式选择：
+
+```sh
+./bin/cli-proxy-api --config config.yaml --bps-login --bps-login-method device --no-browser
+```
 
 导入不会修改源文件。支持原版 bps-local 扁平文件，以及显式带 BPS `client_id` 的
 `tokens` 嵌套文件；必须能够提取账号和绝对过期时间。拒绝混入 Codex 凭据。
@@ -57,15 +67,24 @@ plugins:
 
 先配置 `management.secret-key`，以下请求使用管理密钥。
 
-启动设备码授权：
+启动普通浏览器授权（省略 `method` 也默认使用浏览器模式）：
 
 ```sh
 curl -H 'Authorization: Bearer YOUR_MANAGEMENT_KEY' \
-  'http://127.0.0.1:8317/v8/management/oauth/auth-url?provider=bps&method=device'
+  'http://127.0.0.1:8317/v8/management/oauth/auth-url?provider=bps&method=browser'
 ```
 
-返回 `url`、`user_code`、`state`、`interval`（秒）和 `expires_at`。
-展示地址和设备码，并按返回的间隔轮询：
+返回 `url`、`state`、`interval`（秒）和 `expires_at`，不返回 `user_code`。
+打开 `url` 完成登录，复制完整回调链接，通过 CPA 已有接口提交：
+
+```sh
+curl -X POST -H 'Authorization: Bearer YOUR_MANAGEMENT_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{"provider":"bps","redirect_url":"PASTE_FULL_CALLBACK_URL_HERE"}' \
+  'http://127.0.0.1:8317/v8/management/oauth/callback'
+```
+
+然后用启动时返回的 `state` 查询状态，驱动 Token 交换和凭据保存：
 
 ```sh
 curl -H 'Authorization: Bearer YOUR_MANAGEMENT_KEY' \
@@ -73,8 +92,9 @@ curl -H 'Authorization: Bearer YOUR_MANAGEMENT_KEY' \
 ```
 
 `wait` 表示等待授权，`ok` 表示凭据已保存，`error` 表示需要重新发起。
-轮询请求驱动授权过程，没有后台轮询器。插件会限制实际请求频率，并处理上游 `slow_down`。
-重复或并发轮询不会重复交换授权码、重复保存；响应不包含 Token、PKCE 或私有设备 ID。
+轮询请求驱动授权过程，没有后台轮询器。普通浏览器授权使用独立 PKCE 和 state；
+交换失败不会重试同一授权码。选择 `method=device` 时才返回设备码，并限制轮询频率、处理 `slow_down`。
+重复或并发轮询不会重复交换授权码、重复保存；响应不包含 Token、PKCE verifier 或私有设备 ID。
 
 取消尚未提交保存的授权：
 

@@ -4,6 +4,7 @@ package pluginhost
 
 import (
 	"context"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,7 +31,7 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 		t.Fatalf("build BPS plugin: %v\n%s", errBuild, output)
 	}
 	host := New()
-	client, errOpen := (dynamicLibraryLoader{}).Open(pluginFile{ID: "bps", Path: pluginPath, Version: "0.1.0"}, host)
+	client, errOpen := (dynamicLibraryLoader{}).Open(pluginFile{ID: "bps", Path: pluginPath, Version: "0.2.0"}, host)
 	if errOpen != nil {
 		t.Fatal(errOpen)
 	}
@@ -43,6 +44,18 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 		t.Fatal("BPS capabilities unavailable across C ABI")
 	}
 	host.RegisterPluginForTest("bps", plugin)
+	start, handledStart, errStart := host.StartLogin(context.Background(), "bps", "http://127.0.0.1:8317/v8/management/oauth/callback")
+	if errStart != nil || !handledStart || start.UserCode != "" {
+		t.Fatalf("default browser login through ABI: handled=%t error=%v", handledStart, errStart)
+	}
+	authorize, errURL := url.Parse(start.URL)
+	if errURL != nil || authorize.Host != "auth.openai.com" || authorize.Path != "/oauth/authorize" || authorize.Query().Get("state") != start.State || authorize.Query().Get("code_challenge") == "" {
+		t.Fatal("browser login URL unavailable through C ABI")
+	}
+	pending, handledPoll, errPoll := host.PollLogin(context.Background(), "bps", start.State)
+	if errPoll != nil || !handledPoll || pending.Status != pluginapi.AuthLoginStatusPending {
+		t.Fatalf("pending browser login through ABI: handled=%t error=%v", handledPoll, errPoll)
+	}
 	claims, _ := json.Marshal(map[string]any{"exp": time.Now().Add(time.Hour).Unix(), "sub": "fixture-user",
 		"https://api.openai.com/auth": map[string]string{"chatgpt_account_id": "fixture-account"}})
 	token := "header." + base64.RawURLEncoding.EncodeToString(claims) + ".test"

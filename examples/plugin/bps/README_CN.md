@@ -127,15 +127,16 @@ Token 交换失败不自动重试；明确的 `invalid_grant` 需要重新登录
 CPA 的 BPS 执行器直接复用上游请求/工具转换和流式响应适配，通过 WebSocket 调用 BPS。
 现有 `type: bps` 文件无需重新登录、改类型或启动额外桥接进程。
 
-可用路由为 `bps-gpt-6-astra`、`bps-gpt-6-sol`、`bps-gpt-6.2-astra`、
-`bps-gpt-6.2-sol`。`bps-` 前缀确保选择 BPS 凭据；上游收到原始模型 ID。
+可用路由为 `gpt-6-astra`、`gpt-6-sol`、`gpt-6.2-astra`、
+`gpt-6.2-sol`。从插件 **0.3.1** 起，模型 ID 与上游 GPT 保持一致，不添加渠道前缀。
+如果其他渠道提供同名模型，CPA 会按现有凭据路由策略选择；单独验证 BPS 时应指定这份凭据。
 这是客户端可选目录，账号权限和限流仍由 BPS 决定。
 
 ```sh
 curl http://127.0.0.1:8317/v1/chat/completions \
   -H 'Authorization: Bearer YOUR_API_KEY' \
   -H 'Content-Type: application/json' \
-  -d '{"model":"bps-gpt-6-astra","messages":[{"role":"user","content":"只回复 OK"}],"stream":false,"reasoning_effort":"low"}'
+  -d '{"model":"gpt-6-astra","messages":[{"role":"user","content":"只回复 OK"}],"stream":false,"reasoning_effort":"low"}'
 ```
 
 同时支持 `/v1/responses`，以及流式和非流式响应。可在管理页验证这份凭据，或调用：
@@ -143,7 +144,7 @@ curl http://127.0.0.1:8317/v1/chat/completions \
 ```sh
 curl -X POST -H 'Authorization: Bearer YOUR_MANAGEMENT_KEY' \
   -H 'Content-Type: application/json' \
-  -d '{"name":"bps-IDENTITY_HASH.json","model":"bps-gpt-6-astra"}' \
+  -d '{"name":"bps-IDENTITY_HASH.json","model":"gpt-6-astra"}' \
   'http://127.0.0.1:8317/v8/management/credentials/verify'
 ```
 

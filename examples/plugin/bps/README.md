@@ -145,8 +145,10 @@ routes and the matching CPA build executes BPS WebSocket requests using the
 bps-local request/tool/stream adapter. Existing `type: bps` files work directly;
 no credential relabeling, new login, or standalone bridge is needed.
 
-Use `bps-gpt-6-astra`, `bps-gpt-6-sol`, `bps-gpt-6.2-astra`, or `bps-gpt-6.2-sol`.
-The prefix selects BPS credentials; the original model ID is sent upstream.
+Use `gpt-6-astra`, `gpt-6-sol`, `gpt-6.2-astra`, or `gpt-6.2-sol`.
+From plugin 0.3.1, model IDs match the upstream GPT IDs without a provider prefix.
+If another provider offers the same ID, CPA uses its normal credential routing.
+Select the BPS credential explicitly for provider-specific verification.
 These are selectable routes, not an entitlement claim. BPS enforces permissions
 and capacity. Both `/v1/chat/completions` and `/v1/responses` support streaming
 and non-streaming output. For example:
@@ -155,7 +157,7 @@ and non-streaming output. For example:
 curl http://127.0.0.1:8317/v1/chat/completions \
   -H 'Authorization: Bearer YOUR_API_KEY' \
   -H 'Content-Type: application/json' \
-  -d '{"model":"bps-gpt-6-astra","messages":[{"role":"user","content":"Reply OK"}],"reasoning_effort":"low"}'
+  -d '{"model":"gpt-6-astra","messages":[{"role":"user","content":"Reply OK"}],"reasoning_effort":"low"}'
 ```
 
 The executor preserves CPA proxy selection, cancellation, usage reporting,

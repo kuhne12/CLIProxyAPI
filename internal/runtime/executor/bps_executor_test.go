@@ -28,11 +28,11 @@ func bpsFixtureAuth() *coreauth.Auth {
 	return &coreauth.Auth{ID: "bps-test.json", Provider: "bps", Metadata: map[string]any{"access_token": "fixture-token", "account_id": "fixture-account"}}
 }
 func bpsFixtureRequest(format sdktranslator.Format) (coreexecutor.Request, coreexecutor.Options) {
-	payload := []byte(`{"model":"bps-gpt-6-astra","input":"Say BPS_OK","reasoning":{"effort":"low"}}`)
+	payload := []byte(`{"model":"gpt-6-astra","input":"Say BPS_OK","reasoning":{"effort":"low"}}`)
 	if format == sdktranslator.FormatOpenAI {
-		payload = []byte(`{"model":"bps-gpt-6-astra","messages":[{"role":"user","content":"Say BPS_OK"}],"reasoning_effort":"low"}`)
+		payload = []byte(`{"model":"gpt-6-astra","messages":[{"role":"user","content":"Say BPS_OK"}],"reasoning_effort":"low"}`)
 	}
-	return coreexecutor.Request{Model: "bps-gpt-6-astra", Format: format, Payload: payload}, coreexecutor.Options{SourceFormat: format, OriginalRequest: payload}
+	return coreexecutor.Request{Model: "gpt-6-astra", Format: format, Payload: payload}, coreexecutor.Options{SourceFormat: format, OriginalRequest: payload}
 }
 
 func newBPSFixture(t *testing.T, events []string, inspect func([]byte)) (*BPSExecutor, *atomic.Int32) {
@@ -119,7 +119,7 @@ func TestBPSExecutorFinalPayloadRules(t *testing.T) {
 					t.Errorf("BPS restored filtered fields: %s", raw)
 				}
 			})
-			match := []config.PayloadModelRule{{Name: "bps-gpt-6-astra", Protocol: "codex", FromProtocol: "openai-response"}}
+			match := []config.PayloadModelRule{{Name: "gpt-6-astra", Protocol: "codex", FromProtocol: "openai-response"}}
 			e.cfg.Payload = config.PayloadConfig{Override: []config.PayloadRule{{Models: match, Params: map[string]any{"reasoning_effort": "high", "metadata.task_id": "user-configured-task", "store": true}}}, Filter: []config.PayloadFilterRule{{Models: match, Params: []string{"context_management", "input"}}}}
 			req, opts := bpsFixtureRequest(sdktranslator.FormatOpenAIResponse)
 			if stream {
@@ -230,7 +230,7 @@ func TestBPSExecutorCancellationClosesSocket(t *testing.T) {
 
 func TestBPSExecutorReasoningSuffixUsesCanonicalPipeline(t *testing.T) {
 	reg := registry.GetGlobalRegistry()
-	reg.RegisterClient("bps-thinking-test", "bps", []*registry.ModelInfo{{ID: "bps-gpt-6-astra", Type: "bps", Thinking: &registry.ThinkingSupport{Levels: []string{"low", "medium", "high", "xhigh"}}}})
+	reg.RegisterClient("bps-thinking-test", "bps", []*registry.ModelInfo{{ID: "gpt-6-astra", Type: "bps", Thinking: &registry.ThinkingSupport{Levels: []string{"low", "medium", "high", "xhigh"}}}})
 	defer reg.UnregisterClient("bps-thinking-test")
 	e, _ := newBPSFixture(t, []string{bpsCompletedFixture}, func(raw []byte) {
 		if got := ojson.GetBytes(raw, "reasoning_effort").String(); got != "high" {
@@ -248,7 +248,7 @@ func TestBPSExecutorRestoresDeclaredClientTool(t *testing.T) {
 	native := `{"type":"response.completed","response":{"id":"resp_tool","model":"gpt-6-astra","status":"completed","output":[{"type":"function_call","id":"fc_native","call_id":"call_echo","name":"run_officejs","arguments":"{\"code\":\"{\\\"name\\\":\\\"echo\\\",\\\"arguments\\\":{\\\"text\\\":\\\"hello\\\"}}\"}"}]}}`
 	e, _ := newBPSFixture(t, []string{native}, nil)
 	req, opts := bpsFixtureRequest(sdktranslator.FormatOpenAIResponse)
-	req.Payload = []byte(`{"model":"bps-gpt-6-astra","input":"Use echo","tools":[{"type":"function","name":"echo","parameters":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}}]}`)
+	req.Payload = []byte(`{"model":"gpt-6-astra","input":"Use echo","tools":[{"type":"function","name":"echo","parameters":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}}]}`)
 	opts.OriginalRequest = req.Payload
 	result, err := e.Execute(t.Context(), bpsFixtureAuth(), req, opts)
 	if err != nil {

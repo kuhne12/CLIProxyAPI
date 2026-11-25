@@ -31,7 +31,7 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 		t.Fatalf("build BPS plugin: %v\n%s", errBuild, output)
 	}
 	host := New()
-	client, errOpen := (dynamicLibraryLoader{}).Open(pluginFile{ID: "bps", Path: pluginPath, Version: "0.3.0"}, host)
+	client, errOpen := (dynamicLibraryLoader{}).Open(pluginFile{ID: "bps", Path: pluginPath, Version: "0.3.1"}, host)
 	if errOpen != nil {
 		t.Fatal(errOpen)
 	}
@@ -48,7 +48,7 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 		t.Fatal("BPS model provider unavailable across C ABI")
 	}
 	models, errModels := plugin.Capabilities.ModelProvider.ModelsForAuth(context.Background(), pluginapi.AuthModelRequest{AuthProvider: "bps"})
-	if errModels != nil || models.Provider != "bps" || len(models.Models) != 4 || models.Models[0].ID != "bps-gpt-6-astra" {
+	if errModels != nil || models.Provider != "bps" || len(models.Models) != 4 || models.Models[0].ID != "gpt-6-astra" {
 		t.Fatalf("BPS credential model discovery failed: %v, models=%v", errModels, models.Models)
 	}
 	start, handledStart, errStart := host.StartLogin(context.Background(), "bps", "http://127.0.0.1:8317/v8/management/oauth/callback")

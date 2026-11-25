@@ -58,23 +58,13 @@ func Open(ctx context.Context, client *http.Client, endpoint, token string, body
 	scoped := *client
 	scoped.Timeout = 0
 	scoped.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	conn, resp, errDial := websocket.Dial(ctx, u.String(), &websocket.DialOptions{
+	conn, errDial := dialWithRetry(ctx, u.String(), &websocket.DialOptions{
 		HTTPClient:   &scoped,
 		HTTPHeader:   http.Header{"Origin": {"https://bps.openai.com"}, "User-Agent": {"Mozilla/5.0"}, "Accept": {"*/*"}},
 		Subprotocols: []string{"responses", "openai-bearer." + token},
-	})
+	}, waitHandshakeRetry)
 	if errDial != nil {
-		if resp != nil && resp.Body != nil {
-			_ = resp.Body.Close()
-		}
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		if resp != nil && resp.StatusCode != http.StatusSwitchingProtocols {
-			return nil, &pluginabi.Error{Code: "bps_upstream_rejected", HTTPStatus: resp.StatusCode, Message: fmt.Sprintf("BPS WebSocket authorization rejected (HTTP %d)", resp.StatusCode)}
-		}
-		// Do not expose transport errors that can contain bearer subprotocols.
-		return nil, &pluginabi.Error{Code: pluginabi.ErrorCodeTransientTransport, HTTPStatus: 502, Message: "BPS WebSocket connection failed before sending the request"}
+		return nil, errDial
 	}
 	conn.SetReadLimit((16 << 20) - 1024)
 	if errWrite := conn.Write(ctx, websocket.MessageText, body); errWrite != nil {

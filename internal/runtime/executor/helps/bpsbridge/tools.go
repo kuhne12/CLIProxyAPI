@@ -215,7 +215,7 @@ func (b *Bridge) collectTools(value any, namespace string) ([]any, error) {
 // declarations in automatic mode; forced selections are rejected by Prepare.
 func isUnsupportedHostedTool(kind string) bool {
 	switch kind {
-	case "web_search", "web_search_preview", "web_search_preview_2025_03_11", "web_search_2025_08_26",
+	case "web_search", "web_search_preview", "web_search_preview_2025_03_11", "web_search_2025_08_26", "web_search_2025_08_26_preview",
 		"tool_search", "image_generation", "file_search", "code_interpreter", "computer", "computer_use_preview", "mcp":
 		return true
 	default:

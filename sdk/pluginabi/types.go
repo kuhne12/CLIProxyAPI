@@ -1,7 +1,10 @@
 package pluginabi
 
 import (
+	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/MoeForge/moego/json"
 )
@@ -255,6 +258,29 @@ func (e *Error) StatusCode() int {
 		return 0
 	}
 	return e.HTTPStatus
+}
+
+// RetryAfter exposes the same retry hint for native executors and RPC plugins.
+func (e *Error) RetryAfter() *time.Duration {
+	if e == nil || e.RetryAfterSeconds <= 0 {
+		return nil
+	}
+	seconds := int64(e.RetryAfterSeconds)
+	const maxSeconds = int64((1<<63 - 1) / time.Second)
+	if seconds > maxSeconds {
+		seconds = maxSeconds
+	}
+	delay := time.Duration(seconds) * time.Second
+	return &delay
+}
+
+// SafeResponseHeaders exposes only the bounded retry hint, never upstream headers.
+func (e *Error) SafeResponseHeaders() http.Header {
+	delay := e.RetryAfter()
+	if delay == nil {
+		return nil
+	}
+	return http.Header{"Retry-After": []string{strconv.FormatInt(int64(*delay/time.Second), 10)}}
 }
 
 // IsCredentialScoped reports whether the Error applies to the entire credential.

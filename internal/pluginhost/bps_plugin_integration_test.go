@@ -37,7 +37,7 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 	}
 	t.Chdir(dir)
 	host := New()
-	client, errOpen := (dynamicLibraryLoader{}).Open(pluginFile{ID: "bps", Path: pluginPath, Version: "0.5.3"}, host)
+	client, errOpen := (dynamicLibraryLoader{}).Open(pluginFile{ID: "bps", Path: pluginPath, Version: "0.5.4"}, host)
 	if errOpen != nil {
 		t.Fatal(errOpen)
 	}
@@ -47,7 +47,7 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 		t.Fatal(errRegister)
 	}
 	fields := plugin.Metadata.ConfigFields
-	if plugin.Metadata.Version != "0.5.3" || len(fields) != 3 || fields[0].Name != "cache-creation-as-input" || fields[0].Type != pluginapi.ConfigFieldTypeBoolean || fields[0].Default != false || fields[1].Name != "quota-model-prices" || fields[1].Type != pluginapi.ConfigFieldTypeObject || fields[2].Name != "image-relay-origin" || fields[2].Type != pluginapi.ConfigFieldTypeString {
+	if plugin.Metadata.Version != "0.5.4" || len(fields) != 3 || fields[0].Name != "cache-creation-as-input" || fields[0].Type != pluginapi.ConfigFieldTypeBoolean || fields[0].Default != false || fields[1].Name != "quota-model-prices" || fields[1].Type != pluginapi.ConfigFieldTypeObject || fields[2].Name != "image-relay-origin" || fields[2].Type != pluginapi.ConfigFieldTypeString {
 		t.Fatal("BPS downstream accounting configuration unavailable across C ABI")
 	}
 	if plugin.Capabilities.AuthProvider == nil || plugin.Capabilities.AuthProvider.Identifier() != "bps" || plugin.Capabilities.CommandLinePlugin == nil {

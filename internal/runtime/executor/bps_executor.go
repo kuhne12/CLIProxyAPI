@@ -211,6 +211,13 @@ func (e *BPSExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexe
 		return nil, nil, translated.Err
 	}
 	doc := ojson.NewDoc(translated.Body)
+	// The shared Codex translator strips this field, but BPS supports it.
+	// Restore it before BPS conversion and the final user payload rules.
+	if management := ojson.GetBytes(req.Payload, "context_management"); management.IsArray() {
+		_ = doc.SetRaw("context_management", management.Raw)
+	}
+	// Default rules must recognize the caller's restored fields as explicit.
+	original := doc.Bytes()
 	_ = doc.Set("model", nativeModel)
 	if errThinking := helps.ApplyRequestThinkingDoc(doc, req, opts, from.String(), sdktranslator.FormatCodex.String(), e.Identifier(), translated.ConfigurationUpdatesChanged); errThinking != nil {
 		return nil, nil, errThinking
@@ -232,7 +239,7 @@ func (e *BPSExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexe
 	final := ojson.NewDoc(upstream)
 	bpsbridge.Frame(final)
 	// Apply rules once, after every BPS conversion, injection, and cleanup.
-	finalize := helps.NewPayloadFinalizer(e.cfg, e.Identifier(), baseModel, sdktranslator.FormatCodex.String(), "", translated.Body, req, opts, auth)
+	finalize := helps.NewPayloadFinalizer(e.cfg, e.Identifier(), baseModel, sdktranslator.FormatCodex.String(), "", original, req, opts, auth)
 	finalize.FinalizeDoc(final)
 	payload := final.Bytes()
 	reporter.SetUpstreamModel(final.Get("model").String())

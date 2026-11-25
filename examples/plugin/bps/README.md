@@ -7,6 +7,31 @@ the OAuth implementation from [bps-local-public](https://github.com/sunboyzoey/b
 and reuses CPA's plugin loader, command-line flags, credential store, proxy
 configuration, v8 management sessions, and manual credential refresh.
 
+## Compatibility fixes (0.5.4)
+
+Upgrade CPA and the BPS shared library together. This patch preserves an explicit
+`context_management` array through the shared Responses-to-Codex conversion.
+Final user payload overrides and filters still run after every BPS conversion.
+
+Pre-generation WebSocket handshakes now follow the upstream transient-error
+classification, with at most three attempts and 250/500 ms cancellable backoff.
+Permanent failures and an exhausted transport budget stop CPA's outer retry
+loop without penalizing the credential. Explicit HTTP rejections are handled by
+CPA's existing scheduler; `Retry-After` seconds and HTTP dates are preserved.
+Native plugin errors now expose this hint through the scheduler's retry contract.
+Caller cancellation controls the handshake budget; the standalone CLI's fixed
+handshake and post-connection deadlines are not copied into CPA. A submitted
+generation is never replayed by these handshake retries.
+
+The dated `web_search_2025_08_26_preview` hosted-tool alias is recognized and
+omitted in automatic mode, with an explicit limitation in the BPS protocol
+message. Forced hosted-tool choices remain rejected rather than silently
+claiming to perform a search. Normal GPT model IDs remain unchanged.
+
+This patch does not change upstream product context, account entitlements, or
+USD estimate semantics. Per-account start pacing and installation-specific task
+namespaces remain separate follow-up work.
+
 ## Build and configure
 
 Run from the **CPA repository root** with Go 1.26+ and a C compiler. This plugin

@@ -417,6 +417,8 @@ func (s *Service) registerExecutorForAuth(a *coreauth.Auth, forceReplace bool) {
 		s.registerExecutor(executor.NewDevinExecutor(cfg))
 	case "meta":
 		s.registerExecutor(executor.NewMetaExecutor(cfg))
+	case "bps":
+		s.registerExecutor(pluginhost.NewPluginRefreshCompatExecutor(executor.NewBPSExecutor(cfg), s.pluginHost, cfg))
 	default:
 		providerKey := strings.ToLower(strings.TrimSpace(a.Provider))
 		if providerKey == "" {

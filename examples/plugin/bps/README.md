@@ -138,24 +138,47 @@ retried: a failed response can leave rotation outcome unknown. Definitive
 a grant; sharing the same grant across independent processes adds no rotation
 coordination.
 
+## Inference (0.3.0)
+
+Upgrade CPA and the plugin together. The plugin publishes credential-bound model
+routes and the matching CPA build executes BPS WebSocket requests using the
+bps-local request/tool/stream adapter. Existing `type: bps` files work directly;
+no credential relabeling, new login, or standalone bridge is needed.
+
+Use `bps-gpt-6-astra`, `bps-gpt-6-sol`, `bps-gpt-6.2-astra`, or `bps-gpt-6.2-sol`.
+The prefix selects BPS credentials; the original model ID is sent upstream.
+These are selectable routes, not an entitlement claim. BPS enforces permissions
+and capacity. Both `/v1/chat/completions` and `/v1/responses` support streaming
+and non-streaming output. For example:
+
+```sh
+curl http://127.0.0.1:8317/v1/chat/completions \
+  -H 'Authorization: Bearer YOUR_API_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"bps-gpt-6-astra","messages":[{"role":"user","content":"Reply OK"}],"reasoning_effort":"low"}'
+```
+
+The executor preserves CPA proxy selection, cancellation, usage reporting,
+canonical reasoning handling, and final payload rules. It allows four concurrent
+requests and 64 queued requests per account. It never automatically replays a
+sent generation. Product context injected by the upstream can contribute roughly
+22k input tokens even for a short prompt; reported usage includes those tokens.
+
 ## Scope and compatibility
 
-- This release provides authorization, import, persistence, and manual refresh.
-  It registers no models or BPS inference executor and schedules no automatic
-  refresh. A successful login does not establish model-generation permission.
-- A saved flat credential can be supplied to the existing `bps-local --auth`
-  option. Keep using the separately configured local bridge / CPA Codex channel
-  for inference. Do not relabel BPS credentials as Codex OAuth credentials.
-- Use the CPA build from this change for v8 device-code response fields. The
-  existing management frontend has not been extended with a BPS login button;
-  the CLI and documented API are available.
-- Browser login uses manual callback submission; automatic browser callback
-  forwarding, automatic refresh, and native BPS inference remain outside this release.
+- Authorization, import, persistence, manual refresh, model registration and
+  inference are supported. Automatic scheduled token refresh is not configured.
+- The upstream adapter supports text, HTTPS image URLs, client tools, and
+  validated structured output. Inline image hosting, hosted search, workbook
+  operations, `previous_response_id`, and token counting are unsupported.
+- The matching CPA build is required. The management frontend's login flow still
+  uses the documented CLI/API and manual browser callback submission.
 
 ## Verification and attribution
 
 ```sh
-CGO_ENABLED=1 go test -race ./examples/plugin/bps/go/...
+CGO_ENABLED=1 go test -race ./examples/plugin/bps/go/... ./internal/runtime/executor/helps/bpsbridge
+CGO_ENABLED=1 go test ./internal/runtime/executor -run TestBPS
 CGO_ENABLED=1 go test ./internal/pluginhost -run '^TestBPSSharedLibraryImportsAndPersistsIndependentGrant$' -v
 ```
 

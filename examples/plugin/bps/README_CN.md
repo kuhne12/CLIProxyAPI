@@ -1,4 +1,4 @@
-# BPS 授权插件
+# BPS 授权与推理插件
 
 复用 [bps-local-public](https://github.com/sunboyzoey/bps-local-public) 的浏览器授权、设备码授权和
 Token 刷新协议，接入 CPA 已有的插件加载、CLI、凭据存储、代理配置、v8 管理会话和手动刷新。
@@ -121,14 +121,41 @@ curl -X POST -H 'Authorization: Bearer YOUR_MANAGEMENT_KEY' \
 Token 交换失败不自动重试；明确的 `invalid_grant` 需要重新登录。
 同一授权应只由一个进程管理刷新，多个独立进程之间没有刷新轮换协调。
 
+## 使用这份授权进行推理
+
+从插件 **0.3.0** 起，需要同时升级到本仓库对应的 CPA 构建。插件提供授权与模型目录，
+CPA 的 BPS 执行器直接复用上游请求/工具转换和流式响应适配，通过 WebSocket 调用 BPS。
+现有 `type: bps` 文件无需重新登录、改类型或启动额外桥接进程。
+
+可用路由为 `bps-gpt-6-astra`、`bps-gpt-6-sol`、`bps-gpt-6.2-astra`、
+`bps-gpt-6.2-sol`。`bps-` 前缀确保选择 BPS 凭据；上游收到原始模型 ID。
+这是客户端可选目录，账号权限和限流仍由 BPS 决定。
+
+```sh
+curl http://127.0.0.1:8317/v1/chat/completions \
+  -H 'Authorization: Bearer YOUR_API_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"bps-gpt-6-astra","messages":[{"role":"user","content":"只回复 OK"}],"stream":false,"reasoning_effort":"low"}'
+```
+
+同时支持 `/v1/responses`，以及流式和非流式响应。可在管理页验证这份凭据，或调用：
+
+```sh
+curl -X POST -H 'Authorization: Bearer YOUR_MANAGEMENT_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"bps-IDENTITY_HASH.json","model":"bps-gpt-6-astra"}' \
+  'http://127.0.0.1:8317/v8/management/credentials/verify'
+```
+
 ## 当前范围
 
-- 已实现授权、导入、统一保存和手动刷新；没有注册模型、原生 BPS 推理执行器或自动刷新。
-- 保存的扁平凭据可交给现有 `bps-local --auth`，推理继续使用单独配置的本地桥接服务及
-  CPA Codex 渠道。不要把 BPS 文件改成 Codex OAuth 类型。
-- v8 设备码响应需要本次修改后的 CPA。现有管理前端尚未添加 BPS 登录按钮，可使用 CLI/API。
-- 自动化测试使用模拟 OAuth 和合成凭据；真实账号授权与模型生成权限尚需实际账号验证。
-  授权成功本身不代表具有生成权限。
+- 已实现授权、导入、统一保存、手动刷新、模型注册、原生推理和用量统计；不自动定时刷新。
+- 复用上游的文本、客户端工具和结构化输出适配；图片使用 HTTPS URL。
+  不支持内联图片上传、上游托管搜索、Excel 工作簿操作、`previous_response_id` 或 token 计数接口。
+- 每账号最多 4 个并发请求和 64 个等待请求，取消请求会关闭上游连接并释放槽位。
+  网络断开后不自动重放已接受的生成；上游限流明确返回 429。
+- BPS 上游会添加产品系统上下文，简单请求也可能产生约 22k 输入 Token；用量按实际返回值统计。
+- 使用当前 CPA 构建；管理前端登录仍使用 CLI/API，浏览器登录采用手动回传链接。
 
 上游来源和许可证见 [NOTICE](NOTICE)、[LICENSE.upstream](LICENSE.upstream)。
 详细验证命令见 [英文说明](README.md)。

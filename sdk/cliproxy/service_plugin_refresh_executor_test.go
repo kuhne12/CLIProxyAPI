@@ -162,3 +162,19 @@ func TestUnregisterOpenAICompatExecutorRemovesPluginRefreshWrapper(t *testing.T)
 		t.Fatal("expected plugin-provider executor to be removed")
 	}
 }
+
+func TestRegisterExecutorForAuth_BPSUsesNativeInferenceAndPluginRefresh(t *testing.T) {
+	service := &Service{cfg: &config.Config{}, coreManager: coreauth.NewManager(nil, nil, nil), pluginHost: pluginhost.New()}
+	service.registerExecutorForAuth(&coreauth.Auth{ID: "bps.json", Provider: "bps"}, true)
+	resolved, ok := service.coreManager.Executor("bps")
+	if !ok {
+		t.Fatal("BPS executor not registered")
+	}
+	inner, ok := pluginhost.UnwrapPluginRefreshCompatExecutor(resolved)
+	if !ok {
+		t.Fatal("BPS did not retain plugin OAuth refresh")
+	}
+	if _, ok := inner.(*runtimeexecutor.BPSExecutor); !ok {
+		t.Fatalf("BPS inferred through %T instead of native BPS", inner)
+	}
+}

@@ -1,4 +1,4 @@
-BPS authorization plugin for CLIProxyAPI
+BPS authorization and model plugin for CLIProxyAPI
 
 OAuth code adapted from:
   https://github.com/sunboyzoey/bps-local-public
@@ -13,8 +13,9 @@ Browser authorization parameters and callback validation adapted from:
   through CPA's existing callback endpoint or paste them into the CLI.
 
 The upstream LICENSE is reproduced unchanged as LICENSE.upstream. It contains
-the baseline Unlicense and collected component-specific notices. This plugin
-does not copy the upstream internal/basispoints inference implementation.
+the baseline Unlicense and collected component-specific notices. The native CPA executor reuses the upstream internal/basispoints adapter at
+commit c66fb41006baf7ede70af69a3e2f81af6a6c246b. Its source attribution and
+license are also recorded in internal/runtime/executor/helps/bpsbridge/.
 
 Changes made for this integration:
   - Split blocking device login into CPA start/poll sessions.

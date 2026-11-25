@@ -46,13 +46,29 @@ func handleMethod(method string, raw []byte) ([]byte, error) {
 		}
 		return okEnvelope(map[string]any{
 			"schema_version": pluginabi.SchemaVersion,
-			"metadata": pluginapi.Metadata{Name: "bps", Version: "0.2.0", Author: "CLIProxyAPI contributors",
+			"metadata": pluginapi.Metadata{Name: "bps", Version: "0.3.0", Author: "CLIProxyAPI contributors",
 				GitHubRepository: "https://github.com/router-for-me/CLIProxyAPI", ConfigFields: []pluginapi.ConfigField{}},
-			"capabilities": map[string]bool{"auth_provider": true, "command_line_plugin": true},
+			"capabilities": map[string]bool{"auth_provider": true, "command_line_plugin": true, "model_provider": true},
 		})
 	case pluginabi.MethodPluginQuiesce, pluginabi.MethodPluginShutdown:
 		authProvider.Close()
 		return okEnvelope(struct{}{})
+	case pluginabi.MethodModelStatic, pluginabi.MethodModelForAuth:
+		return dispatch(raw, func(req pluginapi.AuthModelRequest) (pluginapi.ModelResponse, error) {
+			response := pluginapi.ModelResponse{Provider: "bps"}
+			if req.AuthProvider != "" && req.AuthProvider != "bps" {
+				return response, nil
+			}
+			for _, id := range []string{"bps-gpt-6-astra", "bps-gpt-6-sol", "bps-gpt-6.2-astra", "bps-gpt-6.2-sol"} {
+				levels := []string{"low", "medium", "high", "xhigh"}
+				if strings.Contains(id, "6.2-") {
+					levels = append(levels, "max")
+				}
+				response.Models = append(response.Models, pluginapi.ModelInfo{ID: id, Object: "model", OwnedBy: "bps", Type: "bps", DisplayName: id, Name: strings.TrimPrefix(id, "bps-"),
+					SupportedInputModalities: []string{"text", "image"}, SupportedOutputModalities: []string{"text"}, Thinking: &pluginapi.ThinkingSupport{Levels: levels}})
+			}
+			return response, nil
+		})
 	case pluginabi.MethodAuthIdentifier:
 		return okEnvelope(map[string]string{"identifier": "bps"})
 	case pluginabi.MethodAuthLoginStart:

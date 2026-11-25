@@ -1,0 +1,8 @@
+BPS Responses protocol adapter adapted from:
+https://github.com/sunboyzoey/bps-local-public
+Commit: c66fb41006baf7ede70af69a3e2f81af6a6c246b
+Source: internal/basispoints (excluding standalone image relay and routing).
+
+Changes: package/import paths and CPA JSON/regexp implementations.
+Transport, authentication, scheduling, final payload rules, and usage reporting
+are provided by CLIProxyAPI. Upstream license is reproduced in LICENSE.upstream.

@@ -329,6 +329,25 @@ set downstream prices, or rewrite historical bills. It applies to new requests;
 in-flight streams keep their original setting. Disable it to restore the
 upstream cache-creation classification. Model IDs remain unchanged.
 
+## Replaying compacted history
+
+Upstream requests inline compaction through `context_management` (a default
+threshold of 200,000 tokens). This adapter additionally avoids uploading known
+covered history again when clients replay a returned checkpoint.
+
+When a completed BPS generation returns an inline compaction item, CPA remembers
+its fingerprint and the fingerprint of the input it covers. If the same caller
+and credential replay that checkpoint in the same session with the matching input
+prefix, CPA omits covered assistant messages, reasoning, previous checkpoints,
+and completed tool exchanges before sending the next WebSocket request. It keeps
+user and developer instructions, tool declarations, configuration updates, and
+calls needed by later results. Final payload rules still apply.
+
+The process keeps fingerprints for up to 1,024 checkpoints. On a cache miss,
+restart, or edited prefix, CPA sends the supplied history. Clients can reduce
+the upload to CPA itself by applying their inline compaction before sending the
+next request. Preserve the complete output window of a standalone compact call.
+
 ## Request timing
 
 The matching CPA executor records TTFT starting immediately before upstream I/O,

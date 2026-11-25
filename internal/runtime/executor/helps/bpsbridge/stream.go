@@ -153,6 +153,12 @@ func (b *Bridge) transform(reader io.Reader, writer io.Writer) error {
 				output, _ = response["output"].([]any)
 				for i, raw := range output {
 					item, _ := raw.(object)
+					if b.OnInlineCompaction != nil && text(item["type"]) == "compaction" {
+						id, state := text(item["id"]), text(item["encrypted_content"])
+						if id != "" && strings.TrimSpace(state) != "" && (item["status"] == nil || text(item["status"]) == "completed") {
+							b.OnInlineCompaction(id, state)
+						}
+					}
 					if isTool(item) {
 						if err := emitTool(item, i); err != nil {
 							return err

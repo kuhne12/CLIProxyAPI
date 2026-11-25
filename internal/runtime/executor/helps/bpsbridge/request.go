@@ -26,6 +26,9 @@ type Bridge struct {
 	structured       *structuredOutput
 	replay           *ReplayCache
 	scope            string
+
+	// OnInlineCompaction observes checkpoints in validated terminal output.
+	OnInlineCompaction func(id, encrypted string)
 }
 
 func decode(raw []byte, target any) error {
@@ -104,6 +107,7 @@ type PrepareOptions struct {
 	SessionID      string
 	UpstreamTaskID string
 	UpstreamTurnID string
+	AgentIteration int // Optional count from the original, untrimmed input.
 }
 
 func validUpstreamIdentity(value string) bool {
@@ -284,17 +288,6 @@ func PrepareWithOptions(raw []byte, scope string, replay *ReplayCache, options P
 	}
 	prologue = append(prologue, message("developer", protocol))
 	cacheKey := text(source["prompt_cache_key"])
-	conversation := cacheKey
-	if conversation == "" && len(input) > 0 {
-		conversation = fingerprint(input[0])
-	}
-	taskID := fingerprint([]any{scope, conversation})
-	sessionID := strings.TrimSpace(options.SessionID)
-	if sessionID != "" {
-		// Keep an explicit conversation stable when the client trims history or
-		// changes prompt_cache_key. The scope still isolates accounts/callers.
-		taskID = fingerprint([]any{"bps-session-v1", scope, sessionID})
-	}
 	turnEnd := 0
 	if len(input) > 0 {
 		turnEnd = 1
@@ -310,15 +303,22 @@ func PrepareWithOptions(raw []byte, scope string, replay *ReplayCache, options P
 			iteration++
 		}
 	}
-	turnID := fingerprint([]any{scope, input[:turnEnd]})
-	if sessionID != "" {
-		turnID = fingerprint([]any{"bps-turn-v1", taskID, input[:turnEnd]})
+	if options.AgentIteration > 0 {
+		iteration = options.AgentIteration
 	}
-	if hasUpstreamIdentity {
-		// A leased account slot may serve multiple callers. Only these upstream
-		// metadata values are shared; b.scope and all local replay keys remain
-		// scoped to the original caller, authorization and logical conversation.
-		taskID, turnID = options.UpstreamTaskID, options.UpstreamTurnID
+	taskID, turnID := options.UpstreamTaskID, options.UpstreamTurnID
+	if !hasUpstreamIdentity {
+		conversation := cacheKey
+		if conversation == "" && len(input) > 0 {
+			conversation = fingerprint(input[0])
+		}
+		if session := strings.TrimSpace(options.SessionID); session != "" {
+			taskID = fingerprint([]any{"bps-session-v1", scope, session})
+			turnID = fingerprint([]any{"bps-turn-v1", taskID, input[:turnEnd]})
+		} else {
+			taskID = fingerprint([]any{scope, conversation})
+			turnID = fingerprint([]any{scope, input[:turnEnd]})
+		}
 	}
 	output := object{
 		"model": model, "model_selection": "explicit", "stream": true, "store": false,

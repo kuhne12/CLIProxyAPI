@@ -244,14 +244,19 @@ func (e *BPSExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexe
 	caller, _ := opts.Metadata[coreexecutor.CallerScopeMetadataKey].(string)
 	session, _ := opts.Metadata[coreexecutor.CanonicalSessionIDMetadataKey].(string)
 	scopeHash := sha256.Sum256([]byte(auth.ID + "\x00" + caller + "\x00" + session))
-	if errImage := e.imageRelay.RewriteDoc(doc, hex.EncodeToString(scopeHash[:]), helps.BPSImageRelayOrigin(e.cfg)); errImage != nil {
+	scope := hex.EncodeToString(scopeHash[:])
+	rememberCompaction, errHistory := helps.PrepareBPSHistory(doc, scope, &options)
+	if errHistory != nil {
+		return nil, nil, fmt.Errorf("prepare BPS compacted history: %w", errHistory)
+	}
+	if errImage := e.imageRelay.RewriteDoc(doc, scope, helps.BPSImageRelayOrigin(e.cfg)); errImage != nil {
 		status := http.StatusBadRequest
 		if errors.Is(errImage, bpsbridge.ErrImageRelayFull) || errors.Is(errImage, bpsbridge.ErrImageRelayStorage) {
 			status = http.StatusServiceUnavailable
 		}
 		return nil, nil, &pluginabi.Error{Code: pluginabi.ErrorCodeRequestScoped, HTTPStatus: status, Message: errImage.Error()}
 	}
-	upstream, bridge, errPrepare := bpsbridge.PrepareWithOptions(doc.Bytes(), hex.EncodeToString(scopeHash[:]), &bpsReplay, options)
+	upstream, bridge, errPrepare := bpsbridge.PrepareWithOptions(doc.Bytes(), scope, &bpsReplay, options)
 	if errPrepare != nil {
 		return nil, nil, &pluginabi.Error{Code: pluginabi.ErrorCodeRequestScoped, HTTPStatus: 400, Message: errPrepare.Error()}
 	}
@@ -277,6 +282,14 @@ func (e *BPSExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexe
 	openDone()
 	if errOpen != nil {
 		return nil, nil, errOpen
+	}
+	// A checkpoint can only cover the input actually sent after payload rules.
+	if rememberCompaction != nil {
+		bridge.OnInlineCompaction = func(id, state string) {
+			if ojson.GetBytesNoCopy(upstream, "input").Raw == ojson.GetBytesNoCopy(payload, "input").Raw {
+				rememberCompaction(id, state)
+			}
+		}
 	}
 	transformed := bridge.Stream(socket)
 	stop := context.AfterFunc(ctx, func() { _ = transformed.Close() })

@@ -46,9 +46,9 @@ func handleMethod(method string, raw []byte) ([]byte, error) {
 		}
 		return okEnvelope(map[string]any{
 			"schema_version": pluginabi.SchemaVersion,
-			"metadata": pluginapi.Metadata{Name: "bps", Version: "0.3.1", Author: "CLIProxyAPI contributors",
+			"metadata": pluginapi.Metadata{Name: "bps", Version: "0.4.0", Author: "CLIProxyAPI contributors",
 				GitHubRepository: "https://github.com/router-for-me/CLIProxyAPI", ConfigFields: []pluginapi.ConfigField{}},
-			"capabilities": map[string]bool{"auth_provider": true, "command_line_plugin": true, "model_provider": true},
+			"capabilities": map[string]bool{"auth_provider": true, "command_line_plugin": true, "model_provider": true, "quota_provider": true},
 		})
 	case pluginabi.MethodPluginQuiesce, pluginabi.MethodPluginShutdown:
 		authProvider.Close()
@@ -69,8 +69,16 @@ func handleMethod(method string, raw []byte) ([]byte, error) {
 			}
 			return response, nil
 		})
-	case pluginabi.MethodAuthIdentifier:
+	case pluginabi.MethodAuthIdentifier, pluginabi.MethodQuotaIdentifier:
 		return okEnvelope(map[string]string{"identifier": "bps"})
+	case pluginabi.MethodQuotaDescribe:
+		return okEnvelope(pluginapi.QuotaDescribeResponse{SupportedProviders: []string{"bps"}, DisplayName: "BPS"})
+	case pluginabi.MethodQuotaFetch:
+		return dispatch(raw, func(req quotaFetchRequest) (pluginapi.QuotaFetchResponse, error) {
+			return fetchBPSQuota(req, callHostAPI)
+		})
+	case pluginabi.MethodQuotaReset:
+		return okEnvelope(pluginapi.QuotaResetResponse{Success: false, Message: "BPS account quota cannot be reset manually"})
 	case pluginabi.MethodAuthLoginStart:
 		return dispatch(raw, func(req pluginapi.AuthLoginStartRequest) (pluginapi.AuthLoginStartResponse, error) {
 			return authProvider.StartLogin(ctx, req)

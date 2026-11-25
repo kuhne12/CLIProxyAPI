@@ -2,11 +2,38 @@ package pluginhost
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
+	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
+
+func TestQuotaProviderPreservesCredentialProxyForHostCallbacks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "quota.json")
+	if errWrite := os.WriteFile(path, []byte(`{"type":"bps"}`), 0o600); errWrite != nil {
+		t.Fatal(errWrite)
+	}
+	provider := &testQuotaProvider{identifier: "bps", fetchFn: func(ctx context.Context, req pluginapi.QuotaFetchRequest) (pluginapi.QuotaFetchResponse, error) {
+		if oauthProxyURLFromContext(ctx) != "socks5://127.0.0.1:19080" || req.HTTPClient == nil {
+			t.Fatal("quota request lost its credential proxy or host client")
+		}
+		return pluginapi.QuotaFetchResponse{}, nil
+	}}
+	host := newHostWithRecords(capabilityRecord{id: "bps", plugin: pluginapi.Plugin{Capabilities: pluginapi.Capabilities{QuotaProvider: provider}}})
+	manager := coreauth.NewManager(nil, nil, nil)
+	host.SetAuthManager(manager)
+	auth, errRegister := manager.Register(context.Background(), &coreauth.Auth{ID: "quota.json", Provider: "bps", ProxyURL: "socks5://127.0.0.1:19080", Attributes: map[string]string{"path": path}})
+	if errRegister != nil {
+		t.Fatal(errRegister)
+	}
+	_, handled, errFetch := host.FetchQuota(context.Background(), pluginapi.QuotaFetchRequest{Provider: "bps", AuthIndex: auth.Index})
+	if errFetch != nil || !handled {
+		t.Fatalf("credential quota lookup failed: handled=%t error=%v", handled, errFetch)
+	}
+}
 
 type testQuotaProvider struct {
 	identifier string

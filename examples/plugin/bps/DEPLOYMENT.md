@@ -11,7 +11,7 @@ The `test-and-deploy` workflow tests a pushed `main` commit, then runs
 2. Backs up config, Compose files, `.env`, the previous BPS binary, and image ID.
 3. Builds an immutable image from the tested commit before replacing the service.
 4. Checks that resolved ports, mounts, environment, and networks are unchanged.
-5. Installs `bps-v0.3.1.so` and enables it in the existing config. Older versioned
+5. Installs `bps-v0.4.0.so` and enables it in the existing config. Older versioned
    libraries remain available for rollback; the loader selects the newest version.
 6. Recreates only CPA, checks `/healthz` and BPS registration, then saves the new
    image name in `.env`. Failure restores the previous config, BPS binary, and image.

@@ -9,11 +9,14 @@ typedef struct {
 	size_t len;
 } cliproxy_buffer;
 
+typedef int (*cliproxy_host_call_fn)(void*, const char*, const uint8_t*, size_t, cliproxy_buffer*);
+typedef void (*cliproxy_host_free_fn)(void*, size_t);
+
 typedef struct {
 	uint32_t abi_version;
 	void* host_ctx;
-	void* call;
-	void* free_buffer;
+	cliproxy_host_call_fn call;
+	cliproxy_host_free_fn free_buffer;
 } cliproxy_host_api;
 
 typedef int (*cliproxy_plugin_call_fn)(char*, uint8_t*, size_t, cliproxy_buffer*);
@@ -30,20 +33,32 @@ typedef struct {
 extern int cliproxyPluginCall(char*, uint8_t*, size_t, cliproxy_buffer*);
 extern void cliproxyPluginFree(void*, size_t);
 extern void cliproxyPluginShutdown(void);
+
+static const cliproxy_host_api* stored_host;
+static void store_host_api(const cliproxy_host_api* host) { stored_host = host; }
+static int call_host_api(const char* method, const uint8_t* request, size_t len, cliproxy_buffer* response) {
+	if (stored_host == NULL || stored_host->call == NULL) return 1;
+	return stored_host->call(stored_host->host_ctx, method, request, len, response);
+}
+static void free_host_buffer(void* ptr, size_t len) {
+	if (stored_host != NULL && stored_host->free_buffer != NULL && ptr != NULL) stored_host->free_buffer(ptr, len);
+}
 */
 import "C"
 
 import (
+	"errors"
 	"unsafe"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 )
 
 //export cliproxy_plugin_init
-func cliproxy_plugin_init(_ *C.cliproxy_host_api, plugin *C.cliproxy_plugin_api) C.int {
+func cliproxy_plugin_init(host *C.cliproxy_host_api, plugin *C.cliproxy_plugin_api) C.int {
 	if plugin == nil {
 		return 1
 	}
+	C.store_host_api(host)
 	resetProvider()
 	plugin.abi_version = C.uint32_t(pluginabi.ABIVersion)
 	plugin.call = C.cliproxy_plugin_call_fn(C.cliproxyPluginCall)
@@ -95,4 +110,18 @@ func writeResponse(response *C.cliproxy_buffer, raw []byte) {
 	}
 	response.ptr = C.CBytes(raw)
 	response.len = C.size_t(len(raw))
+}
+
+func callHostAPI(method string, raw []byte) ([]byte, error) {
+	cMethod := C.CString(method)
+	defer C.free(unsafe.Pointer(cMethod))
+	payload := C.CBytes(raw)
+	defer C.free(payload)
+	var response C.cliproxy_buffer
+	code := C.call_host_api(cMethod, (*C.uint8_t)(payload), C.size_t(len(raw)), &response)
+	defer C.free_host_buffer(response.ptr, response.len)
+	if code != 0 || response.ptr == nil || response.len == 0 || response.len > 4<<20 {
+		return nil, errors.New("BPS quota transport failed; check connectivity and proxy settings")
+	}
+	return C.GoBytes(response.ptr, C.int(response.len)), nil
 }

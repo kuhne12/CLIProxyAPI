@@ -419,6 +419,10 @@ func (h *Host) callQuotaFetch(ctx context.Context, record capabilityRecord, prov
 	if req.HTTPClient == nil {
 		req.HTTPClient = h.newHTTPClient(authRecord, req.Provider)
 	}
+	if authRecord != nil {
+		// RPC quota providers use host callbacks instead of the in-process client.
+		ctx = WithOAuthProxyURL(ctx, authRecord.ProxyURL)
+	}
 	req.Host = h.hostConfigSummary()
 	defer func() {
 		if recovered := recover(); recovered != nil {

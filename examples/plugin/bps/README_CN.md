@@ -148,9 +148,26 @@ curl -X POST -H 'Authorization: Bearer YOUR_MANAGEMENT_KEY' \
   'http://127.0.0.1:8317/v8/management/credentials/verify'
 ```
 
+## 查询额度与余额
+
+从插件 **0.4.0** 起，BPS 认证文件会显示 CPA 已有的额度查询入口。查询使用与 Codex
+相同的账户用量接口；BPS 官方页面也将用量和积分入口指向 Codex 的账户用量页。
+支持显示套餐、额度剩余比例、重置时间，以及上游明确返回的积分余额。
+余额为空或未返回时保持未知，不显示为 0，也不把积分换算为金额。
+
+在认证文件页面点击 BPS 文件的额度查询按钮，或调用：
+
+```sh
+curl -H 'Authorization: Bearer YOUR_MANAGEMENT_KEY' \
+  'http://127.0.0.1:8317/v8/management/plugins/bps/quota?auth_index=YOUR_AUTH_INDEX'
+```
+
+`auth_index` 可从 `/v8/management/credentials` 获取。查询复用 CPA 的请求取消和
+凭据/全局代理设置，不发起模型推理，不消耗生成 Token；不支持手动重置上游额度。
+
 ## 当前范围
 
-- 已实现授权、导入、统一保存、手动刷新、模型注册、原生推理和用量统计；不自动定时刷新。
+- 已实现授权、导入、统一保存、手动刷新、模型注册、原生推理、用量统计和账户额度查询；不自动定时刷新。
 - 复用上游的文本、客户端工具和结构化输出适配；图片使用 HTTPS URL。
   不支持内联图片上传、上游托管搜索、Excel 工作簿操作、`previous_response_id` 或 token 计数接口。
 - 每账号最多 4 个并发请求和 64 个等待请求，取消请求会关闭上游连接并释放槽位。

@@ -166,10 +166,33 @@ requests and 64 queued requests per account. It never automatically replays a
 sent generation. Product context injected by the upstream can contribute roughly
 22k input tokens even for a short prompt; reported usage includes those tokens.
 
+## Account quota (0.4.0)
+
+The plugin registers CPA's quota capability, so BPS authorization files expose
+the existing management UI quota query action. It uses the same authenticated
+`https://chatgpt.com/backend-api/wham/usage` endpoint as Codex; BPS's official
+application links to the Codex usage settings page for account usage and credits.
+Queries run through CPA's host HTTP callbacks, preserving request cancellation
+and credential/global proxy settings, without generating model tokens.
+
+The result includes the reported plan, remaining percentages and reset times
+for available quota windows, and an optional credits balance. Missing or null
+values remain unknown; a missing balance is never presented as zero. Credits
+are not converted to money. Manual quota reset is not supported.
+
+```sh
+curl -H 'Authorization: Bearer YOUR_MANAGEMENT_KEY' \
+  'http://127.0.0.1:8317/v8/management/plugins/bps/quota?auth_index=YOUR_AUTH_INDEX'
+```
+
+Find `auth_index` in `/v8/management/credentials`; BPS entries also advertise
+`supports_quota: true` and `quota_plugin_id: bps`.
+
 ## Scope and compatibility
 
 - Authorization, import, persistence, manual refresh, model registration and
-  inference are supported. Automatic scheduled token refresh is not configured.
+  inference and account quota queries are supported. Automatic scheduled token
+  refresh is not configured.
 - The upstream adapter supports text, HTTPS image URLs, client tools, and
   validated structured output. Inline image hosting, hosted search, workbook
   operations, `previous_response_id`, and token counting are unsupported.

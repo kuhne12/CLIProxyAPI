@@ -4,10 +4,13 @@ package pluginhost
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,7 +34,7 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 		t.Fatalf("build BPS plugin: %v\n%s", errBuild, output)
 	}
 	host := New()
-	client, errOpen := (dynamicLibraryLoader{}).Open(pluginFile{ID: "bps", Path: pluginPath, Version: "0.3.1"}, host)
+	client, errOpen := (dynamicLibraryLoader{}).Open(pluginFile{ID: "bps", Path: pluginPath, Version: "0.4.0"}, host)
 	if errOpen != nil {
 		t.Fatal(errOpen)
 	}
@@ -44,6 +47,25 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 		t.Fatal("BPS capabilities unavailable across C ABI")
 	}
 	host.RegisterPluginForTest("bps", plugin)
+	if plugin.Capabilities.QuotaProvider == nil || !host.HasQuotaProvider("bps") {
+		t.Fatal("BPS quota capability unavailable across C ABI")
+	}
+	description, _, errDescribe := host.DescribeQuota(context.Background(), "bps")
+	if errDescribe != nil || description.SupportsReset || len(description.SupportedProviders) != 1 || description.SupportedProviders[0] != "bps" {
+		t.Fatalf("invalid BPS quota capabilities: %+v, %v", description, errDescribe)
+	}
+	quotaCalls := 0
+	quotaCtx := context.WithValue(context.Background(), "cliproxy.roundtripper", bpsQuotaRoundTripper(func(req *http.Request) (*http.Response, error) {
+		quotaCalls++
+		if req.URL.String() != "https://chatgpt.com/backend-api/wham/usage" || req.Header.Get("Authorization") != "Bearer quota-test" || req.Header.Get("ChatGPT-Account-Id") != "quota-account" {
+			t.Error("BPS quota callback lost credential scope")
+		}
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"plan_type":"pro","rate_limit":{"primary_window":{"used_percent":15,"limit_window_seconds":18000}},"credits":{"balance":"20"}}`))}, nil
+	}))
+	quota, handledQuota, errQuota := host.FetchQuota(quotaCtx, pluginapi.QuotaFetchRequest{Provider: "bps", Metadata: map[string]any{"access_token": "quota-test", "account_id": "quota-account"}})
+	if errQuota != nil || !handledQuota || quotaCalls != 1 || len(quota.Groups) != 1 || quota.Groups[0].Buckets[0].RemainingFraction != 0.85 || len(quota.Summary) != 1 || quota.Summary[0].Value != 20 {
+		t.Fatalf("BPS quota callback failed across C ABI: %+v, %v, calls=%d", quota, errQuota, quotaCalls)
+	}
 	if plugin.Capabilities.ModelProvider == nil {
 		t.Fatal("BPS model provider unavailable across C ABI")
 	}
@@ -109,3 +131,7 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 		t.Fatalf("credential reload failed: handled=%t error=%v", handled, errParse)
 	}
 }
+
+type bpsQuotaRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f bpsQuotaRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }

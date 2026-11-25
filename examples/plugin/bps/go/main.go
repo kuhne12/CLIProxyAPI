@@ -49,13 +49,16 @@ func handleMethod(method string, raw []byte) ([]byte, error) {
 		}
 		return okEnvelope(map[string]any{
 			"schema_version": pluginabi.SchemaVersion,
-			"metadata": pluginapi.Metadata{Name: "bps", Version: "0.5.2", Author: "CLIProxyAPI contributors",
+			"metadata": pluginapi.Metadata{Name: "bps", Version: "0.5.3", Author: "CLIProxyAPI contributors",
 				GitHubRepository: "https://github.com/router-for-me/CLIProxyAPI", ConfigFields: []pluginapi.ConfigField{{
 					Name: "cache-creation-as-input", Type: pluginapi.ConfigFieldTypeBoolean, Default: false,
 					Description: "Report BPS cache creation as regular input to downstream clients. Total input and cache reads stay unchanged; CPA retains original upstream usage. Requires the matching CPA BPS executor.",
 				}, {
 					Name: "quota-model-prices", Type: pluginapi.ConfigFieldTypeObject, Default: map[string]any{},
-					Description: "USD per million tokens by exact model ID: input, output, cache-read, cache-write; optional priority-multiplier, flex-multiplier, long-context-threshold, long-context-input-multiplier, long-context-output-multiplier. Estimates quota value from observed usage and percentage changes, not an official balance. Samples reset on restart or price changes.",
+					Description: "USD per million tokens by exact model ID: input, output, cache-read, cache-write; optional priority-multiplier, flex-multiplier, long-context-threshold, long-context-input-multiplier, long-context-output-multiplier. Estimates quota value from observed usage and percentage changes, not an official balance. Completed estimates survive restart; new sampling intervals start after restart. Price, plan or quota window changes invalidate estimates.",
+				}, {
+					Name: "image-relay-origin", Type: pluginapi.ConfigFieldTypeString, Default: "",
+					Description: "Public HTTPS origin pointing to this CPA server (no path), for example https://cpa.example.com. Inline PNG/JPEG/GIF/WebP images are served through signed temporary URLs for at most 10 minutes. Empty keeps HTTPS-only image input. Requires the matching CPA executor.",
 				}}},
 			"capabilities": map[string]bool{"auth_provider": true, "command_line_plugin": true, "model_provider": true, "quota_provider": true, "usage_plugin": true},
 		})

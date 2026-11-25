@@ -128,7 +128,7 @@ func TestBPSQuotaEstimatesOnlyObservedPercentageDelta(t *testing.T) {
 
 func TestBPSQuotaSamplesResetOnUncertainty(t *testing.T) {
 	now := time.Unix(1800000000, 0).UTC()
-	for _, name := range []string{"window", "percentage decrease", "plan", "unpriced", "failure", "price change", "restart", "missing reset"} {
+	for _, name := range []string{"window", "percentage decrease", "plan", "price change", "restart", "missing reset"} {
 		t.Run(name, func(t *testing.T) {
 			e := quotaTestEstimator(t)
 			quotaTestAnnotate(e, 0.8, now)
@@ -263,6 +263,9 @@ func TestBPSQuotaConcurrentUsageAndQueries(t *testing.T) {
 }
 
 func TestBPSQuotaLifecycleDispatchPreservesSamplesOnUnchangedConfig(t *testing.T) {
+	previous := quotaEstimator
+	quotaEstimator = newBPSQuotaEstimator()
+	t.Cleanup(func() { quotaEstimator = previous })
 	t.Cleanup(func() { _ = quotaEstimator.configure(nil, true) })
 	raw := quotaConfigRequest(t, quotaTestPrices)
 	if _, err := handleMethod(pluginabi.MethodPluginReconfigure, raw); err != nil {

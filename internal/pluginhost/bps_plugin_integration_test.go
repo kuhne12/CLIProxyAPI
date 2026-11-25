@@ -35,8 +35,9 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 	if output, errBuild := build.CombinedOutput(); errBuild != nil {
 		t.Fatalf("build BPS plugin: %v\n%s", errBuild, output)
 	}
+	t.Chdir(dir)
 	host := New()
-	client, errOpen := (dynamicLibraryLoader{}).Open(pluginFile{ID: "bps", Path: pluginPath, Version: "0.5.2"}, host)
+	client, errOpen := (dynamicLibraryLoader{}).Open(pluginFile{ID: "bps", Path: pluginPath, Version: "0.5.3"}, host)
 	if errOpen != nil {
 		t.Fatal(errOpen)
 	}
@@ -46,7 +47,7 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 		t.Fatal(errRegister)
 	}
 	fields := plugin.Metadata.ConfigFields
-	if plugin.Metadata.Version != "0.5.2" || len(fields) != 2 || fields[0].Name != "cache-creation-as-input" || fields[0].Type != pluginapi.ConfigFieldTypeBoolean || fields[0].Default != false || fields[1].Name != "quota-model-prices" || fields[1].Type != pluginapi.ConfigFieldTypeObject {
+	if plugin.Metadata.Version != "0.5.3" || len(fields) != 3 || fields[0].Name != "cache-creation-as-input" || fields[0].Type != pluginapi.ConfigFieldTypeBoolean || fields[0].Default != false || fields[1].Name != "quota-model-prices" || fields[1].Type != pluginapi.ConfigFieldTypeObject || fields[2].Name != "image-relay-origin" || fields[2].Type != pluginapi.ConfigFieldTypeString {
 		t.Fatal("BPS downstream accounting configuration unavailable across C ABI")
 	}
 	if plugin.Capabilities.AuthProvider == nil || plugin.Capabilities.AuthProvider.Identifier() != "bps" || plugin.Capabilities.CommandLinePlugin == nil {
@@ -92,6 +93,13 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 	estimate, _, errEstimate := host.FetchQuota(quotaCtx, quotaRequest)
 	if errEstimate != nil || len(estimate.Summary) != 3 || estimate.Summary[0].Unit != "credits" || estimate.Summary[1].Currency != "USD" || math.Abs(estimate.Summary[1].Value-126) > 1e-8 || math.Abs(estimate.Summary[2].Value-150) > 1e-8 {
 		t.Fatalf("BPS USD estimate failed across C ABI: %+v, %v", estimate, errEstimate)
+	}
+	if _, errReload := registerRPCPlugin(context.Background(), host, "bps", client, pluginabi.MethodPluginRegister, []byte("quota-model-prices:\n  gpt-6-astra:\n    input: 10\n    output: 50\n")); errReload != nil {
+		t.Fatal(errReload)
+	}
+	restored, _, errRestored := host.FetchQuota(quotaCtx, quotaRequest)
+	if errRestored != nil || len(restored.Summary) != 3 || math.Abs(restored.Summary[1].Value-126) > 1e-8 {
+		t.Fatalf("BPS USD estimate did not persist across registration: %+v, %v", restored, errRestored)
 	}
 	if plugin.Capabilities.ModelProvider == nil {
 		t.Fatal("BPS model provider unavailable across C ABI")

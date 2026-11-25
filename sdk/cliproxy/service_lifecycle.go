@@ -137,7 +137,9 @@ func (s *Service) Run(ctx context.Context) error {
 	}
 
 	// handlers no longer depend on legacy clients; pass nil slice initially
-	s.server = api.NewServer(cfg, s.coreManager, s.accessManager, s.configPath, s.serverOptions...)
+	serverOptions := append([]api.ServerOption{}, s.serverOptions...)
+	serverOptions = append(serverOptions, api.WithBPSImageRelayHandler(&s.bpsImages))
+	s.server = api.NewServer(cfg, s.coreManager, s.accessManager, s.configPath, serverOptions...)
 	s.syncPluginRuntimeConfig(ctx)
 	if homeEnabled {
 		s.configRuntimeMu.Lock()
@@ -411,6 +413,12 @@ func (s *Service) Shutdown(ctx context.Context) error {
 			}
 		}
 
+		if errClose := s.bpsImages.Close(); errClose != nil {
+			log.WithError(errClose).Warn("failed to close BPS image relay")
+			if shutdownErr == nil {
+				shutdownErr = errClose
+			}
+		}
 		helps.RetireProxyPoolPublisher(s.proxyPoolPublisher)
 		usage.StopDefault()
 	})

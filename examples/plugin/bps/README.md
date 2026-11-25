@@ -229,15 +229,51 @@ network or disk I/O and retains only bounded numeric counters and hashed IDs.
 Accounting follows `cache-creation-as-input`, counts total input only once, and
 does not add reasoning tokens to output a second time. Credentials and primary
 quota windows are isolated; code-review and additional limits are not priced.
-Duplicate execution IDs are ignored. Failed or unpriced usage, quota resets,
-decreasing utilization, plan changes, and pricing changes restart calibration.
-Samples are in memory only and reset when the plugin restarts or is re-registered.
+Duplicate execution IDs are ignored. Failed or unpriced usage restarts the observation
+interval while retaining an already completed estimate. Quota resets, decreasing
+utilization, plan changes, and pricing changes invalidate the completed estimate.
+Since 0.5.3, completed estimates are atomically stored in
+`plugins/bps-quota-estimates.json` with private permissions and hashed credential
+identifiers. Keep this directory persistent. After restart, the next quota query
+checks the saved plan/window and begins a fresh observation interval; traffic
+while CPA was offline is never included in a new calibration. Partial samples
+remain memory-only. Read/write failures fall back to fresh/in-memory estimation.
 
 These amounts are **estimated API value, not an official or redeemable account
 balance**. External usage on the same upstream account, changing model mix, rounded
 quota percentages, and asynchronous reporting affect accuracy. They do not apply
 Sub2API user discounts or group multipliers, and do not convert upstream credits
 into dollars. Each quota window is estimated independently; do not sum windows.
+
+## Inline images (0.5.3)
+
+The native executor now includes the bounded ImageRelay from bps-local-public.
+To accept data:image/base64 input, point a public HTTPS origin at this CPA server
+and configure the BPS plugin:
+
+```yaml
+plugins:
+  configs:
+    bps:
+      enabled: true
+      image-relay-origin: https://cpa.example.com
+```
+
+The reverse proxy must forward GET and HEAD requests for `/api/bps-images/` to CPA
+without a separate login screen. Authenticated generation rewrites inline images
+into unguessable signed HTTPS URLs. Each image expires after ten minutes; the
+handler serves only registered images, never a filesystem directory. Files use
+private permissions and are deleted on expiry or graceful shutdown. Existing
+HTTPS image URLs are unchanged. An empty origin keeps HTTPS-only behavior.
+
+PNG, JPEG, GIF and WebP are validated before storage. Limits are 20 MiB per image,
+32 MiB and 128 inline images per request, 64 million pixels per image, and a
+1 GiB / 512-image service-wide store. Downloads have bounded concurrency.
+Chat Completions and Responses streaming/nonstreaming share this implementation,
+including supported image content in tool results. Image conversion precedes
+final user payload rules, so configured overrides and filters remain authoritative.
+Changing the origin affects new links; already issued links remain valid through
+the original reverse proxy until expiry. No third-party image hosting is used.
 
 ## Cache creation as regular input (0.5.0)
 

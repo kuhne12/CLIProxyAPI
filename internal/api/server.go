@@ -272,6 +272,10 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 
 	// Setup routes
 	s.setupRoutes()
+	if optionState.bpsImageRelay != nil {
+		engine.GET("/api/bps-images/*token", gin.WrapH(optionState.bpsImageRelay))
+		engine.HEAD("/api/bps-images/*token", gin.WrapH(optionState.bpsImageRelay))
+	}
 
 	// Apply additional router configurators from options
 	if optionState.routerConfigurator != nil {

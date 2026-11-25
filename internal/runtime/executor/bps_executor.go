@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,8 +26,9 @@ import (
 // request lifecycle. OAuth acquisition/refresh and model discovery belong to
 // the BPS plugin; this executor never treats its grant as a Codex credential.
 type BPSExecutor struct {
-	cfg      *config.Config
-	endpoint string
+	cfg        *config.Config
+	endpoint   string
+	imageRelay *helps.BPSImageRelay
 }
 
 var bpsSlots bpsbridge.SlotPool
@@ -34,6 +36,12 @@ var bpsReplay bpsbridge.ReplayCache
 
 func NewBPSExecutor(cfg *config.Config) *BPSExecutor {
 	return &BPSExecutor{cfg: cfg, endpoint: bpsbridge.ResponsesURL}
+}
+
+// WithImageRelay binds the service-owned image store and download handler.
+func (e *BPSExecutor) WithImageRelay(relay *helps.BPSImageRelay) *BPSExecutor {
+	e.imageRelay = relay
+	return e
 }
 func (*BPSExecutor) Identifier() string { return "bps" }
 
@@ -210,6 +218,13 @@ func (e *BPSExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexe
 	caller, _ := opts.Metadata[coreexecutor.CallerScopeMetadataKey].(string)
 	session, _ := opts.Metadata[coreexecutor.CanonicalSessionIDMetadataKey].(string)
 	scopeHash := sha256.Sum256([]byte(auth.ID + "\x00" + caller + "\x00" + session))
+	if errImage := e.imageRelay.RewriteDoc(doc, hex.EncodeToString(scopeHash[:]), helps.BPSImageRelayOrigin(e.cfg)); errImage != nil {
+		status := http.StatusBadRequest
+		if errors.Is(errImage, bpsbridge.ErrImageRelayFull) || errors.Is(errImage, bpsbridge.ErrImageRelayStorage) {
+			status = http.StatusServiceUnavailable
+		}
+		return nil, nil, &pluginabi.Error{Code: pluginabi.ErrorCodeRequestScoped, HTTPStatus: status, Message: errImage.Error()}
+	}
 	upstream, bridge, errPrepare := bpsbridge.PrepareWithOptions(doc.Bytes(), hex.EncodeToString(scopeHash[:]), &bpsReplay, options)
 	if errPrepare != nil {
 		return nil, nil, &pluginabi.Error{Code: pluginabi.ErrorCodeRequestScoped, HTTPStatus: 400, Message: errPrepare.Error()}

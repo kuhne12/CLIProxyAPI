@@ -34,15 +34,18 @@ type quotaEstimateConfig struct {
 }
 
 type quotaEstimateWindow struct {
-	Reset        time.Time
-	Started      time.Time
-	BaseUsed     float64
-	LastUsed     float64
-	BaseCost     float64
-	BaseUnknown  uint64
-	TotalUSD     float64
-	SampleCost   float64
-	SamplePoints float64
+	SampleStarted time.Time
+	Restored      bool
+	Reset         time.Time
+	Started       time.Time
+	BaseUsed      float64
+	LastUsed      float64
+	LastCost      float64
+	BaseCost      float64
+	BaseUnknown   uint64
+	TotalUSD      float64
+	SampleCost    float64
+	SamplePoints  float64
 }
 
 type quotaEstimateAccount struct {
@@ -56,16 +59,18 @@ type quotaEstimateAccount struct {
 }
 
 type bpsQuotaEstimator struct {
-	mu       sync.Mutex
-	config   quotaEstimateConfig
-	accounts map[[32]byte]*quotaEstimateAccount
+	mu         sync.Mutex
+	config     quotaEstimateConfig
+	accounts   map[[32]byte]*quotaEstimateAccount
+	statePath  string
+	configured bool
 }
 
 const quotaEstimateMaxAccounts = 256
 const quotaEstimateMaxRequests = 4096
 const quotaEstimateMinPoints = 1.0
 
-var quotaEstimator = newBPSQuotaEstimator()
+var quotaEstimator = newPersistentBPSQuotaEstimator("plugins/bps-quota-estimates.json")
 
 func newBPSQuotaEstimator() *bpsQuotaEstimator {
 	return &bpsQuotaEstimator{accounts: make(map[[32]byte]*quotaEstimateAccount)}
@@ -100,10 +105,17 @@ func (e *bpsQuotaEstimator) configure(raw []byte, reset bool) error {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if reset || !reflect.DeepEqual(e.config, cfg) {
+	changed := !reflect.DeepEqual(e.config, cfg)
+	if reset || changed {
 		e.accounts = make(map[[32]byte]*quotaEstimateAccount)
 	}
 	e.config = cfg
+	if !e.configured || reset {
+		e.loadCalibrationsLocked()
+	} else if changed {
+		e.saveCalibrationsLocked()
+	}
+	e.configured = true
 	return nil
 }
 
@@ -254,6 +266,7 @@ func (e *bpsQuotaEstimator) annotate(req quotaFetchRequest, quota *pluginapi.Quo
 	key, identified := quotaEstimateKey(req.AuthIndex, req.AuthID)
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	defer e.saveCalibrationsLocked()
 	if len(e.config.Prices) == 0 {
 		return
 	}
@@ -284,21 +297,30 @@ func (e *bpsQuotaEstimator) annotate(req quotaFetchRequest, quota *pluginapi.Quo
 			w := a.Windows[windowKey]
 			// Relative reset times can vary slightly because of HTTP date precision.
 			resetChanged := w != nil && math.Abs(reset.Sub(w.Reset).Seconds()) > 60
-			if w == nil || resetChanged || used+1e-8 < w.LastUsed || w.BaseUnknown != a.Unknown || a.Cost < w.BaseCost {
+			// Restarted traffic counters cannot account for activity while offline.
+			// Keep the completed calibration, but start a new observation interval.
+			if w != nil && w.Restored {
+				w.Restored = false
+				w.Started, w.BaseUsed, w.BaseCost, w.BaseUnknown = now, used, a.Cost, a.Unknown
+			}
+			if w == nil || resetChanged || used+1e-8 < w.LastUsed {
 				w = &quotaEstimateWindow{Reset: reset, Started: now, BaseUsed: used, LastUsed: used, BaseCost: a.Cost, BaseUnknown: a.Unknown}
 				a.Windows[windowKey] = w
 			}
-			w.LastUsed = used
+			if w.BaseUnknown != a.Unknown || a.Cost < w.BaseCost || (w.TotalUSD > 0 && used > w.LastUsed+1e-8 && a.Cost == w.LastCost) {
+				w.Started, w.BaseUsed, w.BaseCost, w.BaseUnknown = now, used, a.Cost, a.Unknown
+			}
+			w.LastUsed, w.LastCost = used, a.Cost
 			deltaUsed, deltaCost := used-w.BaseUsed, a.Cost-w.BaseCost
 			if deltaUsed+1e-8 >= quotaEstimateMinPoints && deltaCost == 0 {
-				w = &quotaEstimateWindow{Reset: reset, Started: now, BaseUsed: used, LastUsed: used, BaseCost: a.Cost, BaseUnknown: a.Unknown}
-				a.Windows[windowKey] = w
+				w.Started, w.BaseUsed, w.BaseCost, w.BaseUnknown = now, used, a.Cost, a.Unknown
 				deltaUsed = 0
 			}
 			if deltaUsed+1e-8 >= quotaEstimateMinPoints && deltaCost > 0 {
 				estimate := deltaCost * 100 / deltaUsed
 				if finiteQuotaValue(estimate) && estimate > 0 {
 					w.TotalUSD, w.SampleCost, w.SamplePoints = estimate, deltaCost, deltaUsed
+					w.SampleStarted = w.Started
 				}
 			}
 			if w.TotalUSD <= 0 {
@@ -310,7 +332,7 @@ func (e *bpsQuotaEstimator) annotate(req quotaFetchRequest, quota *pluginapi.Quo
 				pluginapi.QuotaMetric{Key: prefix + "remaining_usd", Label: "Estimated remaining (" + bucket.Window + ")", Value: w.TotalUSD * bucket.RemainingFraction, Format: "currency", Currency: "USD"},
 				pluginapi.QuotaMetric{Key: prefix + "total_usd", Label: "Estimated total (" + bucket.Window + ")", Value: w.TotalUSD, Format: "currency", Currency: "USD"},
 			)
-			bucket.Description = fmt.Sprintf("Estimated API value, not an official or redeemable USD balance. Sample: $%.4f / %.2f percentage points since %s. Uses configured model prices and observed CPA traffic; external usage, model mix and rounded quota percentages affect accuracy.", w.SampleCost, w.SamplePoints, w.Started.UTC().Format(time.RFC3339))
+			bucket.Description = fmt.Sprintf("Estimated API value, not an official or redeemable USD balance. Sample: $%.4f / %.2f percentage points since %s. Uses configured model prices and observed CPA traffic; external usage, model mix and rounded quota percentages affect accuracy.", w.SampleCost, w.SamplePoints, w.SampleStarted.UTC().Format(time.RFC3339))
 		}
 	}
 }

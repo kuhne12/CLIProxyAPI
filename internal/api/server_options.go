@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"net/http"
 	"path/filepath"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 )
 
 type serverOptionConfig struct {
+	bpsImageRelay         http.Handler
 	pluginInterceptorHost handlers.PluginInterceptorHost
 	extraMiddleware       []gin.HandlerFunc
 	engineConfigurator    func(*gin.Engine)
@@ -32,6 +34,11 @@ type serverOptionConfig struct {
 
 // ServerOption customises HTTP server construction.
 type ServerOption func(*serverOptionConfig)
+
+// WithBPSImageRelayHandler exposes only temporary signed image downloads.
+func WithBPSImageRelayHandler(handler http.Handler) ServerOption {
+	return func(cfg *serverOptionConfig) { cfg.bpsImageRelay = handler }
+}
 
 func defaultRequestLoggerFactory(cfg *config.Config, configPath string) logging.RequestLogger {
 	configDir := filepath.Dir(configPath)

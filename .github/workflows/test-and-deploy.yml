@@ -39,6 +39,7 @@ jobs:
           go test -p 2 ./...
           go test -race ./examples/plugin/bps/go/... ./internal/runtime/executor/helps/bpsbridge
           go test -race ./internal/runtime/executor -run '^TestBPS'
+          go test -race ./internal/runtime/executor/helps -run '^TestBPS'
           go build -o test-output ./cmd/server
           rm test-output
           bash -n .github/scripts/deploy-production.sh

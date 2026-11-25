@@ -38,6 +38,7 @@ func NewBPSExecutor(cfg *config.Config) *BPSExecutor {
 func (*BPSExecutor) Identifier() string { return "bps" }
 
 func (e *BPSExecutor) Execute(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options) (resp coreexecutor.Response, err error) {
+	cacheCreationAsInput := helps.BPSCacheCreationAsInput(e.cfg)
 	reporter := helps.NewExecutorUsageReporter(ctx, e, req.Model, auth)
 	defer reporter.TrackFailure(ctx, &err)
 	body, prepared, errOpen := e.open(ctx, auth, req, opts, reporter)
@@ -72,6 +73,9 @@ func (e *BPSExecutor) Execute(ctx context.Context, auth *coreauth.Auth, req core
 	} else {
 		reporter.EnsurePublished(ctx)
 	}
+	if cacheCreationAsInput {
+		terminal = helps.BPSDownstreamUsage(terminal)
+	}
 	target := coreexecutor.ResponseFormatOrSource(opts)
 	if target == "" {
 		target = req.Format
@@ -88,6 +92,7 @@ func (e *BPSExecutor) Execute(ctx context.Context, auth *coreauth.Auth, req core
 }
 
 func (e *BPSExecutor) ExecuteStream(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options) (result *coreexecutor.StreamResult, err error) {
+	cacheCreationAsInput := helps.BPSCacheCreationAsInput(e.cfg)
 	reporter := helps.NewExecutorUsageReporter(ctx, e, req.Model, auth)
 	defer reporter.TrackFailure(ctx, &err)
 	body, prepared, errOpen := e.open(ctx, auth, req, opts, reporter)
@@ -135,6 +140,9 @@ func (e *BPSExecutor) ExecuteStream(ctx context.Context, auth *coreauth.Auth, re
 				if detail, ok := helps.ParseCodexUsage(data); ok {
 					reporter.Publish(ctx, detail)
 				}
+			}
+			if cacheCreationAsInput {
+				data = helps.BPSDownstreamUsage(data)
 			}
 			line := append([]byte("data: "), data...)
 			frames := sdktranslator.TranslateStream(ctx, sdktranslator.FormatCodex, target, req.Model, original, prepared, line, &param)

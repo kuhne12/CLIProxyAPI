@@ -46,8 +46,11 @@ func handleMethod(method string, raw []byte) ([]byte, error) {
 		}
 		return okEnvelope(map[string]any{
 			"schema_version": pluginabi.SchemaVersion,
-			"metadata": pluginapi.Metadata{Name: "bps", Version: "0.4.0", Author: "CLIProxyAPI contributors",
-				GitHubRepository: "https://github.com/router-for-me/CLIProxyAPI", ConfigFields: []pluginapi.ConfigField{}},
+			"metadata": pluginapi.Metadata{Name: "bps", Version: "0.5.0", Author: "CLIProxyAPI contributors",
+				GitHubRepository: "https://github.com/router-for-me/CLIProxyAPI", ConfigFields: []pluginapi.ConfigField{{
+					Name: "cache-creation-as-input", Type: pluginapi.ConfigFieldTypeBoolean, Default: false,
+					Description: "Report BPS cache creation as regular input to downstream clients. Total input and cache reads stay unchanged; CPA retains original upstream usage. Requires the matching CPA BPS executor.",
+				}}},
 			"capabilities": map[string]bool{"auth_provider": true, "command_line_plugin": true, "model_provider": true, "quota_provider": true},
 		})
 	case pluginabi.MethodPluginQuiesce, pluginabi.MethodPluginShutdown:

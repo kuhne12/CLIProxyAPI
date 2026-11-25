@@ -188,6 +188,35 @@ curl -H 'Authorization: Bearer YOUR_MANAGEMENT_KEY' \
 Find `auth_index` in `/v8/management/credentials`; BPS entries also advertise
 `supports_quota: true` and `quota_plugin_id: bps`.
 
+## Cache creation as regular input (0.5.0)
+
+Upgrade both CPA and the plugin to the matching build. To charge BPS cache
+creation at the downstream gateway's ordinary input rate, enable the optional
+plugin setting (it defaults to `false`):
+
+```yaml
+plugins:
+  configs:
+    bps:
+      enabled: true
+      cache-creation-as-input: true
+```
+
+The executor clears cache-creation counts and TTL details in downstream usage
+before translating Chat Completions and Responses, for both streaming and
+non-streaming requests. Total input already includes cache creation, so it is
+not added again. Cache reads, output, reasoning, and total tokens are unchanged.
+For example, 1,000 input tokens including 100 cache reads and 200 cache writes
+are reported downstream as 1,000 input tokens, 100 cache reads, and zero cache
+writes; a gateway that subtracts cache reads bills 900 ordinary input tokens.
+
+CPA's internal usage reporting retains the original upstream breakdown for
+auditing. This setting changes downstream classification only: it does not
+disable upstream caching, remove BPS product context, change upstream charges,
+set downstream prices, or rewrite historical bills. It applies to new requests;
+in-flight streams keep their original setting. Disable it to restore the
+upstream cache-creation classification. Model IDs remain unchanged.
+
 ## Scope and compatibility
 
 - Authorization, import, persistence, manual refresh, model registration and

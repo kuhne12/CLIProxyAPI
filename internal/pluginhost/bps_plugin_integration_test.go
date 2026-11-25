@@ -34,7 +34,7 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 		t.Fatalf("build BPS plugin: %v\n%s", errBuild, output)
 	}
 	host := New()
-	client, errOpen := (dynamicLibraryLoader{}).Open(pluginFile{ID: "bps", Path: pluginPath, Version: "0.4.0"}, host)
+	client, errOpen := (dynamicLibraryLoader{}).Open(pluginFile{ID: "bps", Path: pluginPath, Version: "0.5.0"}, host)
 	if errOpen != nil {
 		t.Fatal(errOpen)
 	}
@@ -42,6 +42,10 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 	plugin, errRegister := registerRPCPlugin(context.Background(), host, "bps", client, pluginabi.MethodPluginRegister, nil)
 	if errRegister != nil {
 		t.Fatal(errRegister)
+	}
+	fields := plugin.Metadata.ConfigFields
+	if plugin.Metadata.Version != "0.5.0" || len(fields) != 1 || fields[0].Name != "cache-creation-as-input" || fields[0].Type != pluginapi.ConfigFieldTypeBoolean || fields[0].Default != false {
+		t.Fatal("BPS downstream accounting configuration unavailable across C ABI")
 	}
 	if plugin.Capabilities.AuthProvider == nil || plugin.Capabilities.AuthProvider.Identifier() != "bps" || plugin.Capabilities.CommandLinePlugin == nil {
 		t.Fatal("BPS capabilities unavailable across C ABI")

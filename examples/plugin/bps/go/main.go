@@ -39,6 +39,9 @@ func handleMethod(method string, raw []byte) ([]byte, error) {
 	authProvider := provider.Load()
 	switch method {
 	case pluginabi.MethodPluginRegister, pluginabi.MethodPluginReconfigure:
+		if errConfig := quotaEstimator.configure(raw, method == pluginabi.MethodPluginRegister); errConfig != nil {
+			return nil, errConfig
+		}
 		// Registration also reactivates a quiesced instance after a failed
 		// replacement. Ordinary configuration updates preserve pending logins.
 		if method == pluginabi.MethodPluginRegister {
@@ -46,12 +49,20 @@ func handleMethod(method string, raw []byte) ([]byte, error) {
 		}
 		return okEnvelope(map[string]any{
 			"schema_version": pluginabi.SchemaVersion,
-			"metadata": pluginapi.Metadata{Name: "bps", Version: "0.5.0", Author: "CLIProxyAPI contributors",
+			"metadata": pluginapi.Metadata{Name: "bps", Version: "0.5.1", Author: "CLIProxyAPI contributors",
 				GitHubRepository: "https://github.com/router-for-me/CLIProxyAPI", ConfigFields: []pluginapi.ConfigField{{
 					Name: "cache-creation-as-input", Type: pluginapi.ConfigFieldTypeBoolean, Default: false,
 					Description: "Report BPS cache creation as regular input to downstream clients. Total input and cache reads stay unchanged; CPA retains original upstream usage. Requires the matching CPA BPS executor.",
+				}, {
+					Name: "quota-model-prices", Type: pluginapi.ConfigFieldTypeObject, Default: map[string]any{},
+					Description: "USD per million tokens by exact model ID: input, output, cache-read, cache-write; optional priority-multiplier, flex-multiplier, long-context-threshold, long-context-input-multiplier, long-context-output-multiplier. Estimates quota value from observed usage and percentage changes, not an official balance. Samples reset on restart or price changes.",
 				}}},
-			"capabilities": map[string]bool{"auth_provider": true, "command_line_plugin": true, "model_provider": true, "quota_provider": true},
+			"capabilities": map[string]bool{"auth_provider": true, "command_line_plugin": true, "model_provider": true, "quota_provider": true, "usage_plugin": true},
+		})
+	case pluginabi.MethodUsageHandle:
+		return dispatch(raw, func(record pluginapi.UsageRecord) (struct{}, error) {
+			quotaEstimator.observe(record, time.Now())
+			return struct{}{}, nil
 		})
 	case pluginabi.MethodPluginQuiesce, pluginabi.MethodPluginShutdown:
 		authProvider.Close()
@@ -78,7 +89,11 @@ func handleMethod(method string, raw []byte) ([]byte, error) {
 		return okEnvelope(pluginapi.QuotaDescribeResponse{SupportedProviders: []string{"bps"}, DisplayName: "BPS"})
 	case pluginabi.MethodQuotaFetch:
 		return dispatch(raw, func(req quotaFetchRequest) (pluginapi.QuotaFetchResponse, error) {
-			return fetchBPSQuota(req, callHostAPI)
+			quota, errQuota := fetchBPSQuota(req, callHostAPI)
+			if errQuota == nil {
+				quotaEstimator.annotate(req, &quota, time.Now())
+			}
+			return quota, errQuota
 		})
 	case pluginabi.MethodQuotaReset:
 		return okEnvelope(pluginapi.QuotaResetResponse{Success: false, Message: "BPS account quota cannot be reset manually"})

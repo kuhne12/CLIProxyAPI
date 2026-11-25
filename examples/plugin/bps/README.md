@@ -188,6 +188,50 @@ curl -H 'Authorization: Bearer YOUR_MANAGEMENT_KEY' \
 Find `auth_index` in `/v8/management/credentials`; BPS entries also advertise
 `supports_quota: true` and `quota_plugin_id: bps`.
 
+### Estimated quota value in USD (0.5.1)
+
+Configure `plugins.configs.bps.quota-model-prices` to enable estimated total and
+remaining API value in the existing quota UI. The map is keyed by exact response
+model ID (request model when the upstream omits it). Each entry accepts `input`,
+`output`, `cache-read`, and `cache-write` in **USD per million tokens**. Input and
+output are required; cache prices are required when those token classes occur.
+Prices are administrator-supplied, with no built-in rates or automatic refresh.
+
+Optional `priority-multiplier` and `flex-multiplier` apply to the corresponding
+service tier; unknown tiers or missing multipliers invalidate the sample. Optional
+`long-context-threshold` requires `long-context-input-multiplier` and
+`long-context-output-multiplier`: above the threshold, the former applies to
+ordinary input and cache tokens, and the latter to output. Omit these fields for
+flat context pricing. See the Chinese README for a complete configuration example.
+
+Like Sub2API's window-cost estimate, calibration divides priced usage by quota
+utilization. This implementation uses deltas between quota observations, so a
+new installation never mistakes partial local history for full-window costs:
+
+```text
+estimated total USD = observed USD cost delta * 100 / used percentage-point delta
+estimated remaining USD = estimated total USD * current remaining fraction
+```
+
+The first query establishes a baseline. After normal BPS traffic increases usage
+by at least one percentage point, query again to obtain USD metrics. Until then,
+the window description reports sampling progress; unknown values never become
+zero dollars. Queries do not generate model requests. The usage callback does no
+network or disk I/O and retains only bounded numeric counters and hashed IDs.
+
+Accounting follows `cache-creation-as-input`, counts total input only once, and
+does not add reasoning tokens to output a second time. Credentials and primary
+quota windows are isolated; code-review and additional limits are not priced.
+Duplicate execution IDs are ignored. Failed or unpriced usage, quota resets,
+decreasing utilization, plan changes, and pricing changes restart calibration.
+Samples are in memory only and reset when the plugin restarts or is re-registered.
+
+These amounts are **estimated API value, not an official or redeemable account
+balance**. External usage on the same upstream account, changing model mix, rounded
+quota percentages, and asynchronous reporting affect accuracy. They do not apply
+Sub2API user discounts or group multipliers, and do not convert upstream credits
+into dollars. Each quota window is estimated independently; do not sum windows.
+
 ## Cache creation as regular input (0.5.0)
 
 Upgrade both CPA and the plugin to the matching build. To charge BPS cache

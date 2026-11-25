@@ -4,7 +4,9 @@ package pluginhost
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -34,7 +36,7 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 		t.Fatalf("build BPS plugin: %v\n%s", errBuild, output)
 	}
 	host := New()
-	client, errOpen := (dynamicLibraryLoader{}).Open(pluginFile{ID: "bps", Path: pluginPath, Version: "0.5.0"}, host)
+	client, errOpen := (dynamicLibraryLoader{}).Open(pluginFile{ID: "bps", Path: pluginPath, Version: "0.5.1"}, host)
 	if errOpen != nil {
 		t.Fatal(errOpen)
 	}
@@ -44,14 +46,14 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 		t.Fatal(errRegister)
 	}
 	fields := plugin.Metadata.ConfigFields
-	if plugin.Metadata.Version != "0.5.0" || len(fields) != 1 || fields[0].Name != "cache-creation-as-input" || fields[0].Type != pluginapi.ConfigFieldTypeBoolean || fields[0].Default != false {
+	if plugin.Metadata.Version != "0.5.1" || len(fields) != 2 || fields[0].Name != "cache-creation-as-input" || fields[0].Type != pluginapi.ConfigFieldTypeBoolean || fields[0].Default != false || fields[1].Name != "quota-model-prices" || fields[1].Type != pluginapi.ConfigFieldTypeObject {
 		t.Fatal("BPS downstream accounting configuration unavailable across C ABI")
 	}
 	if plugin.Capabilities.AuthProvider == nil || plugin.Capabilities.AuthProvider.Identifier() != "bps" || plugin.Capabilities.CommandLinePlugin == nil {
 		t.Fatal("BPS capabilities unavailable across C ABI")
 	}
 	host.RegisterPluginForTest("bps", plugin)
-	if plugin.Capabilities.QuotaProvider == nil || !host.HasQuotaProvider("bps") {
+	if plugin.Capabilities.QuotaProvider == nil || !host.HasQuotaProvider("bps") || plugin.Capabilities.UsagePlugin == nil {
 		t.Fatal("BPS quota capability unavailable across C ABI")
 	}
 	description, _, errDescribe := host.DescribeQuota(context.Background(), "bps")
@@ -59,16 +61,37 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 		t.Fatalf("invalid BPS quota capabilities: %+v, %v", description, errDescribe)
 	}
 	quotaCalls := 0
+	quotaBody := `{"plan_type":"pro","rate_limit":{"primary_window":{"used_percent":15,"limit_window_seconds":18000}},"credits":{"balance":"20"}}`
 	quotaCtx := context.WithValue(context.Background(), "cliproxy.roundtripper", bpsQuotaRoundTripper(func(req *http.Request) (*http.Response, error) {
 		quotaCalls++
 		if req.URL.String() != "https://chatgpt.com/backend-api/wham/usage" || req.Header.Get("Authorization") != "Bearer quota-test" || req.Header.Get("ChatGPT-Account-Id") != "quota-account" {
 			t.Error("BPS quota callback lost credential scope")
 		}
-		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"plan_type":"pro","rate_limit":{"primary_window":{"used_percent":15,"limit_window_seconds":18000}},"credits":{"balance":"20"}}`))}, nil
+		return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(quotaBody))}, nil
 	}))
 	quota, handledQuota, errQuota := host.FetchQuota(quotaCtx, pluginapi.QuotaFetchRequest{Provider: "bps", Metadata: map[string]any{"access_token": "quota-test", "account_id": "quota-account"}})
 	if errQuota != nil || !handledQuota || quotaCalls != 1 || len(quota.Groups) != 1 || quota.Groups[0].Buckets[0].RemainingFraction != 0.85 || len(quota.Summary) != 1 || quota.Summary[0].Value != 20 {
 		t.Fatalf("BPS quota callback failed across C ABI: %+v, %v, calls=%d", quota, errQuota, quotaCalls)
+	}
+	_, errConfigure := registerRPCPlugin(context.Background(), host, "bps", client, pluginabi.MethodPluginReconfigure, []byte("quota-model-prices:\n  gpt-6-astra:\n    input: 10\n    output: 50\n"))
+	if errConfigure != nil {
+		t.Fatal(errConfigure)
+	}
+	reset := time.Now().Add(24 * time.Hour).Unix()
+	quotaBody = fmt.Sprintf(`{"plan_type":"pro","rate_limit":{"primary_window":{"used_percent":15,"limit_window_seconds":18000,"reset_at":%d}},"credits":{"balance":"20"}}`, reset)
+	quotaRequest := pluginapi.QuotaFetchRequest{Provider: "bps", AuthIndex: "quota-index", Metadata: map[string]any{"access_token": "quota-test", "account_id": "quota-account"}}
+	baseline, _, errBaseline := host.FetchQuota(quotaCtx, quotaRequest)
+	if errBaseline != nil || len(baseline.Summary) != 1 || !strings.Contains(baseline.Groups[0].Buckets[0].Description, "Collecting") {
+		t.Fatalf("BPS USD baseline failed across C ABI: %+v, %v", baseline, errBaseline)
+	}
+	_, errUsage := callPlugin[rpcEmptyResponse](context.Background(), client, pluginabi.MethodUsageHandle, pluginapi.UsageRecord{Provider: "bps", Model: "gpt-6-astra", AuthIndex: "quota-index", Generate: true, RequestID: "quota-execution", Detail: pluginapi.UsageDetail{InputTokens: 100000, OutputTokens: 10000}})
+	if errUsage != nil {
+		t.Fatal(errUsage)
+	}
+	quotaBody = strings.Replace(quotaBody, `"used_percent":15`, `"used_percent":16`, 1)
+	estimate, _, errEstimate := host.FetchQuota(quotaCtx, quotaRequest)
+	if errEstimate != nil || len(estimate.Summary) != 3 || estimate.Summary[0].Unit != "credits" || estimate.Summary[1].Currency != "USD" || math.Abs(estimate.Summary[1].Value-126) > 1e-8 || math.Abs(estimate.Summary[2].Value-150) > 1e-8 {
+		t.Fatalf("BPS USD estimate failed across C ABI: %+v, %v", estimate, errEstimate)
 	}
 	if plugin.Capabilities.ModelProvider == nil {
 		t.Fatal("BPS model provider unavailable across C ABI")

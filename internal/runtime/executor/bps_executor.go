@@ -46,10 +46,13 @@ func (e *BPSExecutor) WithImageRelay(relay *helps.BPSImageRelay) *BPSExecutor {
 func (*BPSExecutor) Identifier() string { return "bps" }
 
 func (e *BPSExecutor) Execute(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options) (resp coreexecutor.Response, err error) {
+	observation := helps.NewBPSObservation(len(req.Payload))
+	ctx = bpsbridge.WithObserver(ctx, observation.Observer())
+	defer func() { observation.Finish(ctx, err) }()
 	cacheCreationAsInput := helps.BPSCacheCreationAsInput(e.cfg)
 	reporter := helps.NewExecutorUsageReporter(ctx, e, req.Model, auth)
 	defer reporter.TrackFailure(ctx, &err)
-	body, prepared, errOpen := e.open(ctx, auth, req, opts, reporter)
+	body, prepared, errOpen := e.open(ctx, auth, req, opts, reporter, observation)
 	if errOpen != nil {
 		return resp, errOpen
 	}
@@ -60,6 +63,7 @@ func (e *BPSExecutor) Execute(ctx context.Context, auth *coreauth.Auth, req core
 	}()
 	var terminal []byte
 	errRead := helps.ConsumeBPSEvents(body, func(data []byte) error {
+		helps.ObserveResponsesTokenEvent(reporter, data)
 		if errEvent := bpsbridge.EventError(data); errEvent != nil {
 			return errEvent
 		}
@@ -96,14 +100,22 @@ func (e *BPSExecutor) Execute(ctx context.Context, auth *coreauth.Auth, req core
 	if target == sdktranslator.FormatCodex {
 		payload = []byte(ojson.GetBytes(terminal, "response").Raw)
 	}
-	return coreexecutor.Response{Payload: payload, Headers: http.Header{"Content-Type": {"application/json"}}}, nil
+	observation.Mark("response_ready")
+	return coreexecutor.Response{Payload: payload, Headers: observation.Headers("application/json")}, nil
 }
 
 func (e *BPSExecutor) ExecuteStream(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options) (result *coreexecutor.StreamResult, err error) {
+	observation := helps.NewBPSObservation(len(req.Payload))
+	ctx = bpsbridge.WithObserver(ctx, observation.Observer())
+	defer func() {
+		if err != nil {
+			observation.Finish(ctx, err)
+		}
+	}()
 	cacheCreationAsInput := helps.BPSCacheCreationAsInput(e.cfg)
 	reporter := helps.NewExecutorUsageReporter(ctx, e, req.Model, auth)
 	defer reporter.TrackFailure(ctx, &err)
-	body, prepared, errOpen := e.open(ctx, auth, req, opts, reporter)
+	body, prepared, errOpen := e.open(ctx, auth, req, opts, reporter, observation)
 	if errOpen != nil {
 		return nil, errOpen
 	}
@@ -118,6 +130,8 @@ func (e *BPSExecutor) ExecuteStream(ctx context.Context, auth *coreauth.Auth, re
 	}
 	go func() {
 		defer close(out)
+		var errStream error
+		defer func() { observation.Finish(ctx, errStream) }()
 		defer func() {
 			if errClose := body.Close(); errClose != nil {
 				log.Debug("BPS response body close failed")
@@ -134,14 +148,11 @@ func (e *BPSExecutor) ExecuteStream(ctx context.Context, auth *coreauth.Auth, re
 			}
 		}
 		errRead := helps.ConsumeBPSEvents(body, func(data []byte) error {
+			helps.ObserveResponsesTokenEvent(reporter, data)
 			if errEvent := bpsbridge.EventError(data); errEvent != nil {
 				return errEvent
 			}
-			reporter.RecordFirstPacket()
 			kind := ojson.GetBytes(data, "type").String()
-			if kind == "response.output_text.delta" {
-				reporter.ObserveTokenEvent(true)
-			}
 			if kind == "response.completed" || kind == "response.incomplete" {
 				terminal = true
 				reporter.ObserveResponseModel(data)
@@ -159,22 +170,26 @@ func (e *BPSExecutor) ExecuteStream(ctx context.Context, auth *coreauth.Auth, re
 					return errSend
 				}
 			}
+			if len(frames) > 0 {
+				observation.Handoff(data)
+			}
 			return nil
 		})
 		if errRead == nil && !terminal {
 			errRead = helps.BPSMissingTerminal()
 		}
 		if errRead != nil {
+			errStream = errRead
 			reporter.PublishFailure(ctx, errRead)
 			_ = send(coreexecutor.StreamChunk{Err: errRead})
 		} else {
 			reporter.EnsurePublished(ctx)
 		}
 	}()
-	return &coreexecutor.StreamResult{Headers: http.Header{"Content-Type": {"text/event-stream"}}, Chunks: out}, nil
+	return &coreexecutor.StreamResult{Headers: observation.Headers("text/event-stream"), Chunks: out}, nil
 }
 
-func (e *BPSExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options, reporter *helps.UsageReporter) (io.ReadCloser, []byte, error) {
+func (e *BPSExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options, reporter *helps.UsageReporter, observation *helps.BPSObservation) (io.ReadCloser, []byte, error) {
 	if opts.Alt == "responses/compact" {
 		return nil, nil, &pluginabi.Error{Code: pluginabi.ErrorCodeNotImplemented, HTTPStatus: 501, Message: "BPS requires complete history and has no standalone compaction endpoint"}
 	}
@@ -187,7 +202,9 @@ func (e *BPSExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexe
 		return nil, nil, &pluginabi.Error{Code: "bps_auth_required", HTTPStatus: 401, Message: "BPS credential is missing its access token or account ID"}
 	}
 	subject, _ := auth.Metadata["sub"].(string)
+	queueDone := observation.Stage("queue")
 	options, release, errSlot := bpsSlots.Acquire(ctx, account+"\x00"+subject)
+	queueDone()
 	if errSlot != nil {
 		return nil, nil, errSlot
 	}
@@ -197,6 +214,8 @@ func (e *BPSExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexe
 			release()
 		}
 	}()
+	prepareDone := observation.Stage("prepare")
+	defer prepareDone()
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 	nativeModel := bpsbridge.NativeModel(baseModel)
 	from := opts.SourceFormat
@@ -248,7 +267,14 @@ func (e *BPSExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexe
 		ctx = coreexecutor.WithRequestProxyURL(ctx, opts.ProxyURL)
 	}
 	client := helps.NewProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
+	observation.SetWireBytes(len(payload))
+	prepareDone()
+	// Match other executors: TTFT starts at upstream I/O, excluding local queue
+	// and preparation. The observation log measures the full executor lifetime.
+	reporter.StartResponseTTFT()
+	openDone := observation.Stage("upstream_open")
 	socket, errOpen := bpsbridge.Open(ctx, client, e.endpoint, token, payload)
+	openDone()
 	if errOpen != nil {
 		return nil, nil, errOpen
 	}

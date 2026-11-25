@@ -329,6 +329,47 @@ set downstream prices, or rewrite historical bills. It applies to new requests;
 in-flight streams keep their original setting. Disable it to restore the
 upstream cache-creation classification. Model IDs remain unchanged.
 
+## Request timing
+
+The matching CPA executor records TTFT starting immediately before upstream I/O,
+excluding local slot wait and request preparation. It uses CPA's Responses event
+classification for text, reasoning, validated tool arguments and terminal-only
+responses. Metadata events do not count as substantive output; terminal events
+provide a fallback when no output token was observed. Tool TTFT includes the
+bridge's existing final-response validation wait.
+
+Each request writes one `BPS request timing` structured log entry, correlated by
+the normal request ID, including failures and cancellation. `queue_ms`,
+`prepare_ms`, `ws_dial_ms`, `ws_write_ms` and `upstream_open_ms` are stage durations.
+Dial duration sums actual handshake attempts; upstream-open duration also includes
+retry backoff and writing. These overlapping durations must not be added together.
+`input_bytes` measures the executor input and `upstream_bytes` measures the final
+WebSocket payload after user payload rules.
+
+The transport observation boundaries follow upstream's
+[WebSocket timing implementation](https://github.com/sunboyzoey/bps-local-public/blob/c66fb41006baf7ede70af69a3e2f81af6a6c246b/internal/proxy/websocket_timing.go).
+The intervals between write completion, upstream events and output remain local
+observations; they cannot independently separate upstream queueing, context
+processing, reasoning and network transit without additional upstream timestamps.
+
+Other `*_ms` milestones are offsets from executor entry: `first_wire_event`,
+`first_response_event`, `upstream_sent`, `first_upstream_text`,
+`upstream_tool_arguments_done`, `upstream_tool_item_done`, `upstream_terminal`,
+`first_handoff`, `first_text_handoff`, `tool_handoff`, `terminal_handoff`,
+`response_ready` (nonstreaming), and `executor_done`. Missing events are omitted.
+`tool_delivery_wait_ms` is the interval from the first upstream tool arguments-done
+event to the first validated tool-argument handoff. Handoff means delivery to CPA's
+stream channel, not receipt by the remote client. Write completion similarly marks
+the local write call, not upstream processing or receipt confirmation.
+
+With `requests.passthrough-headers: true`, successful responses also expose the
+available pre-stream timings as `X-BPS-Queue-Ms`, `X-BPS-Prepare-Ms`,
+`X-BPS-Ws-Dial-Ms`, `X-BPS-Ws-Write-Ms`, and `X-BPS-Upstream-Open-Ms`, plus input/wire
+sizes and handshake count/status. Later milestones remain in the log. No prompts,
+tool arguments, tokens, cookies, or raw upstream errors enter these observations.
+This instrumentation does not alter request payloads, tool delivery, retries, or
+network timeout behavior.
+
 ## Scope and compatibility
 
 - Authorization, import, persistence, manual refresh, model registration and

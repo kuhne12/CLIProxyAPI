@@ -79,6 +79,16 @@ var quotedLogFields = map[string]struct{}{
 
 var pluginPathFieldOrder = []string{"path", "active_path", "retired_path"}
 
+// BPS timing records contain only sizes, counts, statuses and local durations.
+var bpsTimingFieldOrder = []string{
+	"outcome", "input_bytes", "upstream_bytes", "ws_handshake_attempts", "ws_handshake_status",
+	"queue_ms", "prepare_ms", "ws_dial_ms", "ws_write_ms", "upstream_open_ms",
+	"first_wire_event_ms", "first_response_event_ms", "upstream_sent_ms", "first_upstream_text_ms",
+	"upstream_tool_arguments_done_ms", "upstream_tool_item_done_ms", "upstream_terminal_ms", "upstream_terminal_type",
+	"first_handoff_ms", "first_text_handoff_ms", "tool_handoff_ms", "tool_delivery_wait_ms",
+	"terminal_handoff_ms", "response_ready_ms", "executor_done_ms",
+}
+
 func formatLogFieldValue(key string, value any) string {
 	if _, quoted := quotedLogFields[key]; quoted {
 		if stringValue, ok := value.(string); ok {
@@ -118,6 +128,13 @@ func (m *LogFormatter) Format(entry *log.Entry) ([]byte, error) {
 		for _, k := range logFieldOrder {
 			if v, ok := entry.Data[k]; ok {
 				fields = append(fields, fmt.Sprintf("%s=%s", k, formatLogFieldValue(k, v)))
+			}
+		}
+		if entry.Data["provider"] == "bps" {
+			for _, k := range bpsTimingFieldOrder {
+				if v, ok := entry.Data[k]; ok {
+					fields = append(fields, fmt.Sprintf("%s=%s", k, formatLogFieldValue(k, v)))
+				}
 			}
 		}
 		if pluginID, ok := entry.Data["plugin_id"]; ok && strings.TrimSpace(fmt.Sprint(pluginID)) != "" {

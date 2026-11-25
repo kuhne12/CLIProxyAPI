@@ -25,8 +25,19 @@ const maxHandshakeAttempts = 3
 // dialWithRetry retries only known transient failures before any generation is sent.
 // Caller cancellation controls the budget; no deadline is added to an established socket.
 func dialWithRetry(ctx context.Context, address string, opts *websocket.DialOptions, wait func(context.Context, time.Duration) error) (*websocket.Conn, error) {
+	observer := observerFromContext(ctx)
 	for attempt := 1; ; attempt++ {
+		if observer.DialStart != nil {
+			observer.DialStart()
+		}
 		conn, resp, errDial := websocket.Dial(ctx, address, opts)
+		if observer.DialDone != nil {
+			status := 0
+			if resp != nil {
+				status = resp.StatusCode
+			}
+			observer.DialDone(status)
+		}
 		if errDial == nil {
 			return conn, nil
 		}

@@ -67,14 +67,22 @@ func Open(ctx context.Context, client *http.Client, endpoint, token string, body
 		return nil, errDial
 	}
 	conn.SetReadLimit((16 << 20) - 1024)
-	if errWrite := conn.Write(ctx, websocket.MessageText, body); errWrite != nil {
+	observer := observerFromContext(ctx)
+	if observer.WriteStart != nil {
+		observer.WriteStart()
+	}
+	errWrite := conn.Write(ctx, websocket.MessageText, body)
+	if observer.WriteDone != nil {
+		observer.WriteDone()
+	}
+	if errWrite != nil {
 		_ = conn.CloseNow()
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 		return nil, &pluginabi.Error{Code: pluginabi.ErrorCodeStreamTruncated, HTTPStatus: 502, Message: "BPS request transmission failed; generation was not replayed"}
 	}
-	return &socketBody{ctx: ctx, conn: conn, pending: bytes.NewReader(nil)}, nil
+	return &socketBody{ctx: ctx, conn: conn, pending: bytes.NewReader(nil), observer: observer}, nil
 }
 
 type socketBody struct {
@@ -82,6 +90,7 @@ type socketBody struct {
 	conn     *websocket.Conn
 	pending  *bytes.Reader
 	terminal bool
+	observer Observer
 	once     sync.Once
 }
 
@@ -107,6 +116,9 @@ func (b *socketBody) Read(p []byte) (int, error) {
 		}
 		if kind != websocket.MessageText || !ojson.ValidBytes(data) {
 			return 0, protocolFailure()
+		}
+		if b.observer.Event != nil {
+			b.observer.Event(data)
 		}
 		doc := ojson.NewDoc(data)
 		event := doc.Get("type").String()

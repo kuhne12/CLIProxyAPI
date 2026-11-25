@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>BPS 设置</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: light-dark(#f7f8fa, #17191d);
+        --surface: light-dark(#fff, #202328);
+        --text: light-dark(#20252c, #eef0f4);
+        --muted: light-dark(#57616e, #b3bbc6);
+        --line: light-dark(#d9dfe5, #41464f);
+        --accent: light-dark(#275a9d, #9dc6ff);
+        --primary: light-dark(#244e83, #91b9ef);
+        --on-primary: light-dark(#fff, #122239);
+        --danger: light-dark(#ae342b, #ffa79e);
+        font:
+          15px/1.5 system-ui,
+          sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+      }
+      main {
+        max-width: 900px;
+        margin: auto;
+        padding: clamp(16px, 4vw, 48px);
+      }
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+      h1 {
+        font-size: clamp(25px, 4vw, 34px);
+        letter-spacing: -0.04em;
+      }
+      h2 {
+        font-size: 20px;
+      }
+      h3 {
+        font-size: 16px;
+      }
+      p,
+      small {
+        color: var(--muted);
+      }
+      small {
+        font-size: 13px;
+      }
+      .row,
+      footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+      .card,
+      dialog {
+        background: var(--surface);
+        color: var(--text);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: clamp(16px, 3vw, 26px);
+      }
+      .card {
+        margin-top: 18px;
+      }
+      .row + small {
+        display: block;
+        margin-top: 3px;
+      }
+      fieldset {
+        border: 0;
+        padding: 0;
+        margin: 0;
+        min-width: 0;
+      }
+      label,
+      .label {
+        display: grid;
+        gap: 5px;
+        font-weight: 600;
+      }
+      label small {
+        font-weight: 400;
+      }
+      .setting {
+        margin-top: 20px;
+      }
+      .toggle {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      input,
+      button {
+        font: inherit;
+        color: inherit;
+      }
+      input:not([type="checkbox"]) {
+        width: 100%;
+        min-width: 0;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface);
+        padding: 8px 10px;
+      }
+      input[type="checkbox"] {
+        width: 19px;
+        height: 19px;
+        accent-color: var(--primary);
+      }
+      button {
+        cursor: pointer;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface);
+        padding: 7px 13px;
+        font-weight: 550;
+      }
+      button:hover {
+        border-color: var(--accent);
+      }
+      button.primary {
+        background: var(--primary);
+        color: var(--on-primary);
+        border-color: transparent;
+      }
+      button:disabled {
+        opacity: 0.55;
+        cursor: default;
+      }
+      :focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+      footer {
+        justify-content: flex-end;
+        margin-top: 20px;
+      }
+      .notice {
+        margin-top: 12px;
+        min-height: 1.5em;
+        color: var(--muted);
+      }
+      .notice:empty {
+        display: none;
+      }
+      .notice.error,
+      .danger {
+        color: var(--danger);
+      }
+      .price {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 13px 0;
+        border-top: 1px solid var(--line);
+      }
+      .price strong {
+        overflow-wrap: anywhere;
+      }
+      .price small {
+        display: block;
+        font-variant-numeric: tabular-nums;
+      }
+      #prices {
+        margin-top: 18px;
+      }
+      .empty {
+        padding-top: 12px;
+        border-top: 1px solid var(--line);
+      }
+      dialog {
+        width: min(560px, 95vw);
+        max-height: 90vh;
+      }
+      dialog::backdrop {
+        background: #10182066;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .grid label {
+        font-size: 13px;
+      }
+      .group {
+        margin: 16px 0 6px;
+      }
+      #advanced {
+        margin-top: 14px;
+      }
+      summary {
+        cursor: pointer;
+        font-weight: 600;
+      }
+      details .grid {
+        margin-top: 10px;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      @media (max-width: 480px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+        main {
+          padding: 14px;
+        }
+        dialog {
+          padding: 16px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header class="row">
+        <h1>BPS 设置</h1>
+        <button id="reload" type="button" hidden>重新读取</button>
+      </header>
+      <p id="status" class="notice" role="status" aria-live="polite"></p>
+      <form id="login" class="card" hidden>
+        <label
+          >CPA 管理密钥<input id="key" type="password" autocomplete="off" required /><small
+            >用于读取和保存此实例的 BPS 配置。</small
+          ></label
+        >
+        <footer><button class="primary">读取设置</button></footer>
+      </form>
+      <fieldset id="settings" hidden>
+        <section class="card">
+          <h2>请求设置</h2>
+          <form id="general">
+            <div class="setting">
+              <label class="toggle"><input id="cache" type="checkbox" />将缓存写入计为普通输入</label>
+              <small>对新请求的下游用量和额度估算生效。CPA 调用明细保留上游的缓存写入量。</small>
+            </div>
+            <label class="setting"
+              >图片中转地址<input
+                id="origin"
+                type="url"
+                placeholder="https://cpa.example.com"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <small
+                >填写指向此 CPA 的公网 HTTPS 地址，允许访问 /api/bps-images/。留空时仅接受 HTTPS
+                图片链接。</small
+              ></label
+            >
+            <footer><button class="primary">保存请求设置</button></footer>
+          </form>
+        </section>
+        <section class="card">
+          <div class="row">
+            <h2>模型价格</h2>
+            <button id="add" type="button">添加模型</button>
+          </div>
+          <small>按每百万 Token 的美元单价估算额度。修改价格会重新校准估算。</small>
+          <div id="prices"></div>
+        </section>
+      </fieldset>
+      <dialog id="editor" aria-labelledby="editor-title">
+        <form id="price-form">
+          <fieldset id="price-fields">
+            <h2 id="editor-title">模型价格</h2>
+            <label class="setting"
+              >模型 ID<input
+                id="model"
+                required
+                list="models"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="gpt-6.2-astra"
+            /></label>
+            <datalist id="models">
+              <option>gpt-6.2-astra</option>
+              <option>gpt-6.2-sol</option>
+              <option>gpt-6-astra</option>
+              <option>gpt-6-sol</option>
+            </datalist>
+            <h3 class="group">单价 · USD / 百万 Token</h3>
+            <div class="grid" id="rates"></div>
+            <details id="advanced">
+              <summary>服务档与长上下文倍率</summary>
+              <div class="grid" id="multipliers"></div>
+            </details>
+            <p class="notice" id="price-status" role="status"></p>
+            <footer>
+              <button id="remove" type="button" class="danger">删除价格</button
+              ><button id="close" type="button">取消</button><button class="primary">保存价格</button>
+            </footer>
+          </fieldset>
+        </form>
+      </dialog>
+    </main>
+    <script>
+      "use strict";
+      const el = (id) => document.getElementById(id);
+      const configPath = new URL("../../../../v8/management/config/plugins/configs/bps", location.href);
+      const ratesKey = "quota-model-prices",
+        cacheKey = "cache-creation-as-input",
+        originKey = "image-relay-origin";
+      const rates = [
+        ["input", "输入"],
+        ["output", "输出"],
+        ["cache-read", "缓存读取"],
+        ["cache-write", "缓存写入"],
+      ];
+      const multipliers = [
+        ["priority-multiplier", "Priority 倍率"],
+        ["flex-multiplier", "Flex 倍率"],
+        ["long-context-threshold", "长上下文阈值（Token）"],
+        ["long-context-input-multiplier", "长上下文输入倍率"],
+        ["long-context-output-multiplier", "长上下文输出倍率"],
+      ];
+      let key = "",
+        etag = "",
+        prices = {},
+        editing = null,
+        busy = false;
+
+      function notice(message, error = false) {
+        for (const id of ["status", "price-status"]) {
+          el(id).textContent = message;
+          el(id).classList.toggle("error", error);
+        }
+      }
+      function savedPanelKey() {
+        // Reuse only the current management center's remembered login for this CPA base.
+        try {
+          const raw = localStorage.getItem("cli-proxy-auth") || "";
+          const prefix = "enc::v2::";
+          if (!raw.startsWith(prefix)) return "";
+          const mask = new TextEncoder().encode("cli-proxy-api-webui::secure-storage|" + location.host);
+          const bytes = Uint8Array.from(
+            atob(raw.slice(prefix.length)),
+            (ch, i) => ch.charCodeAt(0) ^ mask[i % mask.length],
+          );
+          const { state } = JSON.parse(new TextDecoder().decode(bytes));
+          if (
+            state.rememberPassword &&
+            typeof state.managementKey === "string" &&
+            state.apiBase?.replace(/\/+$/, "") + "/v8/management/config/plugins/configs/bps" ===
+              configPath.href
+          )
+            return state.managementKey;
+        } catch {}
+        return "";
+      }
+      async function request(method, path, data) {
+        const headers = { Authorization: "Bearer " + key };
+        if (method !== "GET") {
+          if (!etag) throw Error("请重新读取配置后再保存。");
+          headers["If-Match"] = etag;
+          headers["Content-Type"] = "application/json";
+        }
+        const response = await fetch(configPath.href + path, {
+          method,
+          headers,
+          mode: "same-origin",
+          redirect: "error",
+          cache: "no-store",
+          body: JSON.stringify(data),
+        });
+        if (response.status === 401 || response.status === 403) {
+          etag = "";
+          key = "";
+          el("editor").close();
+          el("login").hidden = false;
+          el("settings").hidden = true;
+          el("reload").hidden = true;
+          throw Error("请使用此 CPA 实例的管理密钥登录。");
+        }
+        if (response.status === 412 || response.status === 409) {
+          etag = "";
+          throw Error("配置已被其他操作修改。请重新读取最新设置后再编辑。");
+        }
+        if (!response.ok) throw Error("请求失败（HTTP " + response.status + "）。");
+        const result = await response.json();
+        etag = response.headers.get("ETag") || "";
+        return result;
+      }
+      async function run(action) {
+        if (busy) return;
+        busy = true;
+        el("settings").disabled = el("price-fields").disabled = el("reload").disabled = true;
+        try {
+          await action();
+        } catch (error) {
+          notice(error.message || "请求失败。", true);
+        } finally {
+          busy = false;
+          el("settings").disabled = el("price-fields").disabled = el("reload").disabled = false;
+        }
+      }
+      function listPrices() {
+        const list = el("prices");
+        list.replaceChildren();
+        const entries = Object.entries(prices).sort(([a], [b]) => a.localeCompare(b));
+        el("add").disabled = entries.length >= 64;
+        if (!entries.length) {
+          const empty = document.createElement("p");
+          empty.className = "empty";
+          empty.textContent = "尚未配置模型价格。";
+          list.append(empty);
+        }
+        for (const [id, price] of entries) {
+          const row = document.createElement("div"),
+            desc = document.createElement("div"),
+            title = document.createElement("strong");
+          const detail = document.createElement("small"),
+            button = document.createElement("button");
+          row.className = "price";
+          title.textContent = id;
+          detail.textContent = "输入 $" + price.input + "　·　输出 $" + price.output;
+          button.type = "button";
+          button.textContent = "编辑";
+          button.setAttribute("aria-label", "编辑 " + id);
+          button.onclick = () => openPrice(id);
+          desc.append(title, detail);
+          row.append(desc, button);
+          list.append(row);
+        }
+      }
+      async function load() {
+        const cfg = await request("GET", "");
+        el("cache").checked = cfg[cacheKey] === true;
+        el("origin").value = cfg[originKey] || "";
+        prices = cfg[ratesKey] || {};
+        listPrices();
+        el("login").hidden = true;
+        el("settings").hidden = el("reload").hidden = false;
+        notice("");
+      }
+      function makeFields(fields, container) {
+        for (const [name, caption] of fields) {
+          const label = document.createElement("label"),
+            input = document.createElement("input");
+          input.type = "number";
+          input.id = name;
+          input.min = "0";
+          input.required = ["input", "output"].includes(name);
+          const integer = name === "long-context-threshold";
+          input.step = integer ? "1" : "any";
+          input.max = integer ? String(Number.MAX_SAFE_INTEGER) : "1000000000";
+          label.textContent = caption + (input.required ? " *" : "");
+          label.append(input);
+          el(container).append(label);
+        }
+      }
+      function openPrice(id) {
+        editing = id;
+        const price = id === null ? {} : prices[id];
+        el("editor-title").textContent = id === null ? "添加模型价格" : "编辑模型价格";
+        el("model").value = id || "";
+        el("model").readOnly = id !== null;
+        el("remove").hidden = id === null;
+        for (const [name] of [...rates, ...multipliers]) el(name).value = price[name] ?? "";
+        el("advanced").open = multipliers.some(([name]) => price[name] != null);
+        el("price-status").textContent = "";
+        el("editor").showModal();
+      }
+      async function savePrices(next) {
+        await request("PUT", "/" + ratesKey, next);
+        prices = next;
+        listPrices();
+        el("editor").close();
+        notice("模型价格已保存。");
+      }
+      el("price-form").onsubmit = (event) => {
+        event.preventDefault();
+        const id = el("model").value.trim();
+        if (!id || (editing === null && Object.hasOwn(prices, id)))
+          return notice("请输入唯一的模型 ID。", true);
+        const price = editing === null ? {} : { ...prices[editing] };
+        for (const [name] of [...rates, ...multipliers]) {
+          const field = el(name);
+          if (field.value === "") delete price[name];
+          else price[name] = field.valueAsNumber;
+        }
+        if (
+          price["long-context-threshold"] > 0 &&
+          (price["long-context-input-multiplier"] == null || price["long-context-output-multiplier"] == null)
+        ) {
+          el("advanced").open = true;
+          return notice("设置长上下文阈值后，请同时填写输入和输出倍率。", true);
+        }
+        run(() => savePrices({ ...prices, [id]: price }));
+      };
+      el("remove").onclick = () => {
+        if (!confirm("删除模型 " + editing + " 的价格？")) return;
+        const next = { ...prices };
+        delete next[editing];
+        run(() => savePrices(next));
+      };
+      el("general").onsubmit = (event) => {
+        event.preventDefault();
+        const origin = el("origin").value.trim();
+        if (origin) {
+          try {
+            const url = new URL(origin);
+            if (!/^https:\/\/[^/?#@\\\s]+\/?$/i.test(origin) || url.protocol !== "https:" || !url.hostname)
+              throw Error();
+          } catch {
+            notice("请输入 HTTPS 域名，可带端口，请移除账号、路径、查询参数和片段。", true);
+            el("origin").focus();
+            return;
+          }
+        }
+        run(async () => {
+          await request("PATCH", "", { [cacheKey]: el("cache").checked, [originKey]: origin });
+          notice("请求设置已保存。");
+        });
+      };
+      el("editor").oncancel = (event) => {
+        if (busy) event.preventDefault();
+      };
+      el("close").onclick = () => el("editor").close();
+      el("add").onclick = () => openPrice(null);
+      el("reload").onclick = () => run(load);
+      el("login").onsubmit = (event) => {
+        event.preventDefault();
+        key = el("key").value.trim();
+        el("key").value = "";
+        run(load);
+      };
+      makeFields(rates, "rates");
+      makeFields(multipliers, "multipliers");
+      try {
+        if (parent !== window) {
+          const root = parent.document.documentElement;
+          const theme = () => {
+            document.documentElement.style.colorScheme =
+              { dark: "dark", light: "light", white: "light" }[root.dataset.theme] || "light dark";
+          };
+          theme();
+          new MutationObserver(theme).observe(root, { attributes: true, attributeFilter: ["data-theme"] });
+        }
+      } catch {}
+      key = savedPanelKey();
+      if (key) {
+        el("reload").hidden = false;
+        run(load);
+      } else el("login").hidden = false;
+    </script>
+  </body>
+</html>

@@ -49,7 +49,7 @@ func handleMethod(method string, raw []byte) ([]byte, error) {
 		}
 		return okEnvelope(map[string]any{
 			"schema_version": pluginabi.SchemaVersion,
-			"metadata": pluginapi.Metadata{Name: "bps", Version: "0.5.5", Author: "CLIProxyAPI contributors",
+			"metadata": pluginapi.Metadata{Name: "bps", Version: "0.5.6", Author: "CLIProxyAPI contributors",
 				GitHubRepository: "https://github.com/router-for-me/CLIProxyAPI", ConfigFields: []pluginapi.ConfigField{{
 					Name: "cache-creation-as-input", Type: pluginapi.ConfigFieldTypeBoolean, Default: false,
 					Description: "Report BPS cache creation as regular input to downstream clients. Total input and cache reads stay unchanged; CPA retains original upstream usage. Requires the matching CPA BPS executor.",
@@ -60,8 +60,14 @@ func handleMethod(method string, raw []byte) ([]byte, error) {
 					Name: "image-relay-origin", Type: pluginapi.ConfigFieldTypeString, Default: "",
 					Description: "Public HTTPS origin pointing to this CPA server (no path), for example https://cpa.example.com. Inline PNG/JPEG/GIF/WebP images are served through signed temporary URLs for at most 10 minutes. Empty keeps HTTPS-only image input. Requires the matching CPA executor.",
 				}}},
-			"capabilities": map[string]bool{"auth_provider": true, "command_line_plugin": true, "model_provider": true, "quota_provider": true, "usage_plugin": true},
+			"capabilities": map[string]bool{"auth_provider": true, "command_line_plugin": true, "model_provider": true, "quota_provider": true, "usage_plugin": true, "management_api": true},
 		})
+	case pluginabi.MethodManagementRegister:
+		return okEnvelope(pluginapi.ManagementRegistrationResponse{Resources: []pluginapi.ResourceRoute{{
+			Path: settingsPath, Menu: "BPS 设置", Description: "缓存计量、图片中转与模型价格",
+		}}})
+	case pluginabi.MethodManagementHandle:
+		return dispatch(raw, serveSettings)
 	case pluginabi.MethodUsageHandle:
 		return dispatch(raw, func(record pluginapi.UsageRecord) (struct{}, error) {
 			quotaEstimator.observe(record, time.Now())

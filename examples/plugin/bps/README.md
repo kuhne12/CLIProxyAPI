@@ -32,6 +32,10 @@ This patch does not change upstream product context, account entitlements, or
 USD estimate semantics. Per-account start pacing and installation-specific task
 namespaces remain separate follow-up work.
 
+## Settings panel (0.5.6)
+
+Open **BPS 设置** in the management center’s plugin menu to configure cache-write accounting, the image relay origin, and per-model quota prices and multipliers. The panel uses the existing v8 configuration API. Changes to request settings and model prices are saved separately and hot-reloaded. A stale edit requires reloading the latest settings.
+
 ## Build and configure
 
 Run from the **CPA repository root** with Go 1.26+ and a C compiler. This plugin

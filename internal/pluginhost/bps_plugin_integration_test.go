@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
@@ -37,7 +38,7 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 	}
 	t.Chdir(dir)
 	host := New()
-	client, errOpen := (dynamicLibraryLoader{}).Open(pluginFile{ID: "bps", Path: pluginPath, Version: "0.5.5"}, host)
+	client, errOpen := (dynamicLibraryLoader{}).Open(pluginFile{ID: "bps", Path: pluginPath, Version: "0.5.6"}, host)
 	if errOpen != nil {
 		t.Fatal(errOpen)
 	}
@@ -47,13 +48,20 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 		t.Fatal(errRegister)
 	}
 	fields := plugin.Metadata.ConfigFields
-	if plugin.Metadata.Version != "0.5.5" || len(fields) != 3 || fields[0].Name != "cache-creation-as-input" || fields[0].Type != pluginapi.ConfigFieldTypeBoolean || fields[0].Default != false || fields[1].Name != "quota-model-prices" || fields[1].Type != pluginapi.ConfigFieldTypeObject || fields[2].Name != "image-relay-origin" || fields[2].Type != pluginapi.ConfigFieldTypeString {
+	if plugin.Metadata.Version != "0.5.6" || len(fields) != 3 || fields[0].Name != "cache-creation-as-input" || fields[0].Type != pluginapi.ConfigFieldTypeBoolean || fields[0].Default != false || fields[1].Name != "quota-model-prices" || fields[1].Type != pluginapi.ConfigFieldTypeObject || fields[2].Name != "image-relay-origin" || fields[2].Type != pluginapi.ConfigFieldTypeString {
 		t.Fatal("BPS downstream accounting configuration unavailable across C ABI")
 	}
 	if plugin.Capabilities.AuthProvider == nil || plugin.Capabilities.AuthProvider.Identifier() != "bps" || plugin.Capabilities.CommandLinePlugin == nil {
 		t.Fatal("BPS capabilities unavailable across C ABI")
 	}
 	host.RegisterPluginForTest("bps", plugin)
+	host.RegisterManagementRoutes(context.Background(), nil)
+	page := httptest.NewRecorder()
+	if !host.ServeResourceHTTP(page, httptest.NewRequest(http.MethodGet, "/v0/resource/plugins/bps/settings", nil)) ||
+		page.Code != http.StatusOK || !strings.HasPrefix(page.Header().Get("Content-Type"), "text/html") ||
+		!strings.Contains(page.Body.String(), "<title>BPS 设置</title>") {
+		t.Fatal("BPS settings page unavailable across C ABI")
+	}
 	if plugin.Capabilities.QuotaProvider == nil || !host.HasQuotaProvider("bps") || plugin.Capabilities.UsagePlugin == nil {
 		t.Fatal("BPS quota capability unavailable across C ABI")
 	}

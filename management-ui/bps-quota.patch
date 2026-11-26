@@ -132,6 +132,18 @@ index 8da5941..6ee0c0b 100644
            <adapter.Body
              quota={quota}
              classes={quotaClasses}
+diff --git a/src/features/quota/components/QuotaTimeline.tsx b/src/features/quota/components/QuotaTimeline.tsx
+index a821202..b20b091 100644
+--- a/src/features/quota/components/QuotaTimeline.tsx
++++ b/src/features/quota/components/QuotaTimeline.tsx
+@@ -381,6 +381,7 @@ function Lane({ lane, span, now, mode, cells, nowPercent, resolvedTheme }: LaneP
+           {lane.limits.map((limit) => (
+             <span key={limit.label} className={styles.laneLimit}>
+               {lane.provider === 'meta' ? t(limit.label) : limit.label} <b>{limit.remaining}%</b>
++              {limit.description && <InfoTip label={limit.label} content={limit.description} />}
+             </span>
+           ))}
+         </div>
 diff --git a/src/features/quota/providers/plugin/BpsQuotaBody.module.scss b/src/features/quota/providers/plugin/BpsQuotaBody.module.scss
 new file mode 100644
 index 0000000..d291864
@@ -469,11 +481,49 @@ index 5bb3575..ec380a2 100644
        {(plan || quota.summary.length > 0) && (
 diff --git a/src/features/quota/providers/plugin/bpsQuota.ts b/src/features/quota/providers/plugin/bpsQuota.ts
 new file mode 100644
-index 0000000..fe61d0f
+index 0000000..670d28d
 --- /dev/null
 +++ b/src/features/quota/providers/plugin/bpsQuota.ts
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,83 @@
 +import type { AntigravityQuotaSummaryPayload, PluginQuotaMetric } from '@/types';
++import type { TFunction } from 'i18next';
++import { buildAntigravityQuotaGroups } from '@/utils/quota';
++
++// BPS emits explicit durations (7d, 5h, 30m), not Antigravity's weekly aliases.
++// Estimate descriptions are explanatory text, never a window's display label.
++export function buildBpsQuotaGroups(payload: AntigravityQuotaSummaryPayload, t: TFunction) {
++  const groupKeys: Record<string, string> = {
++    'Account usage': 'bps_account_usage',
++    'Code review': 'bps_code_review',
++    Credits: 'bps_credit_balance',
++  };
++  const units: Record<string, { seconds: number; key: string }> = {
++    d: { seconds: 86400, key: 'bps_days' },
++    h: { seconds: 3600, key: 'bps_hours' },
++    m: { seconds: 60, key: 'bps_minutes' },
++    s: { seconds: 1, key: 'bps_seconds' },
++  };
++  return buildAntigravityQuotaGroups(payload).map((group) => ({
++    ...group,
++    buckets: group.buckets.map((bucket) => {
++      const match = /^([1-9]\d*)([dhms])$/.exec(bucket.window ?? '');
++      const count = match ? Number(match[1]) : 0;
++      const unit = match ? units[match[2]] : undefined;
++      const seconds = unit ? count * unit.seconds : 0;
++      const validDuration = Number.isSafeInteger(seconds) && seconds > 0;
++      const groupLabel = groupKeys[group.label]
++        ? t('plugin_quota.' + groupKeys[group.label])
++        : group.label;
++      const windowLabel =
++        validDuration && unit ? t('plugin_quota.' + unit.key, { count }) : bucket.window;
++      return {
++        ...bucket,
++        label: windowLabel ? `${groupLabel} · ${windowLabel}` : groupLabel,
++        periodHours: validDuration ? seconds / 3600 : bucket.periodHours,
++      };
++    }),
++  }));
++}
 +
 +export interface BpsQuotaEstimate {
 +  total: number;
@@ -519,7 +569,7 @@ index 0000000..fe61d0f
 +  return /^bps_estimated_[0-9]+_(remaining|total)_usd$/.test(metric.key);
 +}
 diff --git a/src/features/quota/providers/plugin/data.ts b/src/features/quota/providers/plugin/data.ts
-index 6e8c7ef..5b856fa 100644
+index 6e8c7ef..5057386 100644
 --- a/src/features/quota/providers/plugin/data.ts
 +++ b/src/features/quota/providers/plugin/data.ts
 @@ -8,6 +8,7 @@ import type {
@@ -534,7 +584,7 @@ index 6e8c7ef..5b856fa 100644
    selectedQuotaPluginId,
  } from '@/utils/quota';
  import type { QuotaProviderData } from '../types';
-+import { buildBpsQuotaEstimates } from './bpsQuota';
++import { buildBpsQuotaEstimates, buildBpsQuotaGroups } from './bpsQuota';
  
  type PluginQuotaPayload = AntigravityQuotaSummaryPayload & {
 +  observedAt?: string;
@@ -553,16 +603,18 @@ index 6e8c7ef..5b856fa 100644
    groups: PluginQuotaState['groups'];
    subscription: AntigravityQuotaSubscription | null;
    summary: PluginQuotaMetric[];
-@@ -141,18 +151,61 @@ export const fetchPluginQuota = async (
+@@ -141,18 +151,62 @@ export const fetchPluginQuota = async (
      `/plugins/${encodeURIComponent(pluginId)}/quota`,
      { auth_index: authIndex }
    );
 +  const summary = normalizePluginQuotaSummary(payload.summary);
    return {
+-    groups: buildAntigravityQuotaGroups(payload),
 +    pluginId,
 +    observedAt: typeof payload.observedAt === 'string' ? payload.observedAt : undefined,
 +    stale: payload.stale === true,
-     groups: buildAntigravityQuotaGroups(payload),
++    groups:
++      pluginId === 'bps' ? buildBpsQuotaGroups(payload, t) : buildAntigravityQuotaGroups(payload),
      subscription: normalizeSubscription(payload.subscription),
 -    summary: normalizePluginQuotaSummary(payload.summary),
 +    summary,
@@ -731,6 +783,41 @@ index 0000000..8cb3c5f
 +    };
 +  }, [files, disabled, t, generation, fileGenerations]);
 +}
+diff --git a/src/features/quota/quotaTimelineModel.ts b/src/features/quota/quotaTimelineModel.ts
+index 38c290f..99a683a 100644
+--- a/src/features/quota/quotaTimelineModel.ts
++++ b/src/features/quota/quotaTimelineModel.ts
+@@ -29,6 +29,7 @@ const SESSION_PERIOD_HOURS = 5;
+ /** A limit summarized in the lane's left column. */
+ export interface TimelineLimit {
+   label: string;
++  description?: string;
+   /** Remaining percent, 0..100. */
+   remaining: number;
+ }
+@@ -368,6 +369,7 @@ interface XaiBillingLike {
+ 
+ interface AntigravityBucketLike {
+   label?: string;
++  description?: string;
+   /** Fraction 0..1 of quota REMAINING — the inverse of the percent-used providers. */
+   remainingFraction?: number | null;
+   resetAtMs?: number | null;
+@@ -585,7 +587,13 @@ export function buildTimelineLane(input: TimelineLaneInput): TimelineLane {
+       periodHours: chosen.periodHours ?? null,
+       remaining: remainingOf(chosen),
+       limits: buckets
+-        .map((bucket) => ({ label: bucket.label ?? '', remaining: remainingOf(bucket) }))
++        .map((bucket) => ({
++          label: bucket.label ?? '',
++          remaining: remainingOf(bucket),
++          ...((quota as { pluginId?: string }).pluginId === 'bps' && bucket.description
++            ? { description: bucket.description }
++            : {}),
++        }))
+         .filter((limit): limit is TimelineLimit => limit.remaining !== null),
+     };
+   }
 diff --git a/src/i18n/locales/en.json b/src/i18n/locales/en.json
 index c732027..b573f3f 100644
 --- a/src/i18n/locales/en.json
@@ -1339,4 +1426,166 @@ index 0000000..f7199ab
 +    await expect(resetBpsQuota(file, i18n.t)).rejects.toThrow();
 +    expect(read).not.toHaveBeenCalled();
 +  });
++});
+diff --git a/tests/bpsQuotaTimeline.test.ts b/tests/bpsQuotaTimeline.test.ts
+new file mode 100644
+index 0000000..41ba5f8
+--- /dev/null
++++ b/tests/bpsQuotaTimeline.test.ts
+@@ -0,0 +1,156 @@
++import { describe, expect, spyOn, test } from 'bun:test';
++import { createElement } from 'react';
++import { renderToStaticMarkup } from 'react-dom/server';
++import { I18nextProvider } from 'react-i18next';
++import i18n from '@/i18n';
++import { apiClient } from '@/services/api/client';
++import { fetchPluginQuota } from '@/features/quota/providers/plugin/data';
++import { buildBpsQuotaGroups } from '@/features/quota/providers/plugin/bpsQuota';
++import { buildTimelineLane, projectLane, timelineSpan } from '@/features/quota/quotaTimelineModel';
++import { QuotaTimeline } from '@/features/quota/components/QuotaTimeline';
++import type { AntigravityQuotaSummaryPayload, PluginQuotaState } from '@/types';
++
++const chinese = i18n.cloneInstance({ lng: 'zh-CN' });
++const now = Date.parse('2026-11-26T07:13:47Z');
++const resetTime = '2026-12-02T02:27:11Z';
++const description =
++  'Estimated API value, not an official or redeemable USD balance. Sample: $2.3436 / 1.00 percentage points.';
++const payload: AntigravityQuotaSummaryPayload = {
++  groups: [
++    {
++      displayName: 'Account usage',
++      buckets: [{ window: '7d', remainingFraction: 0.42, resetTime, description }],
++    },
++  ],
++};
++const quota = (value = payload): PluginQuotaState => ({
++  status: 'success',
++  pluginId: 'bps',
++  summary: [],
++  groups: buildBpsQuotaGroups(value, chinese.t),
++});
++const laneFor = (state: PluginQuotaState, maxPeriodHours = 336) =>
++  buildTimelineLane({
++    name: 'bps-test.json',
++    displayName: 'BPS test',
++    provider: 'plugin',
++    quota: state,
++    maxPeriodHours,
++  });
++
++describe('BPS quota timeline', () => {
++  test('normalizes the management response into a real seven-day window', async () => {
++    const post = spyOn(apiClient, 'post').mockResolvedValue(payload);
++    try {
++      const data = await fetchPluginQuota(
++        {
++          name: 'bps-test.json',
++          authIndex: 'test-index',
++          quotaPluginId: 'bps',
++          quotaProvider: 'bps',
++        },
++        chinese.t
++      );
++      const lane = laneFor({ status: 'success', ...data });
++      expect(lane.periodHours).toBe(168);
++      expect(lane.anchorMs).toBe(Date.parse(resetTime));
++      expect(lane.remaining).toBe(42);
++      expect(lane.limits[0].label).toBe('账户用量 · 7天');
++      expect(lane.limits[0].description).toBe(description);
++      const span = timelineSpan('weekly', 0, now);
++      const live = projectLane(lane, span.startMs, span.endMs, now, 'weekly').find(
++        (window) => window.state === 'live'
++      );
++      expect(live?.endMs).toBe(Date.parse(resetTime));
++      expect(live?.startMs).toBe(Date.parse(resetTime) - 7 * 86400_000);
++      expect(live?.remaining).toBe(42);
++    } finally {
++      post.mockRestore();
++    }
++  });
++
++  test('renders a weekly bar and keeps estimate details out of the row label', () => {
++    const markup = renderToStaticMarkup(
++      createElement(
++        I18nextProvider,
++        { i18n: chinese },
++        createElement(QuotaTimeline, {
++          entries: [{ file: { name: 'bps-test.json', type: 'bps' }, type: 'plugin' }],
++          displayNameFor: (name: string) => name,
++          quotaFor: () => quota(),
++          resolvedTheme: 'dark',
++          now,
++        })
++      )
++    );
++    expect(markup).toContain('>7d</span>');
++    expect(markup).toContain('账户用量 · 7天');
++    expect(markup).toContain('<b>42%</b>');
++    expect(markup).not.toContain(chinese.t('quota_management.windows_idle'));
++    expect(markup).toContain(description);
++    expect(markup).not.toContain(`${description} <b>`);
++  });
++
++  test('keeps five-hour and weekly selection separate and preserves data', () => {
++    const state = quota({
++      groups: [
++        {
++          displayName: 'Account usage',
++          buckets: [
++            { window: '7d', remainingFraction: 0.42, resetTime, description },
++            { window: '5h', remainingFraction: 0.75, resetTime: '2026-11-26T09:00:00Z' },
++          ],
++        },
++      ],
++    });
++    expect(laneFor(state).periodHours).toBe(168);
++    expect(laneFor(state, 5).periodHours).toBe(5);
++    expect(laneFor(state, 5).remaining).toBe(75);
++    const weekly = state.groups[0].buckets.find((bucket) => bucket.window === '7d');
++    expect(weekly?.remainingFraction).toBe(0.42);
++    expect(weekly?.resetTime).toBe(resetTime);
++    expect(weekly?.description).toBe(description);
++    expect(weekly?.id).toBe('account-usage-7d-1');
++  });
++
++  test.each([
++    ['1d', 24],
++    ['30m', 0.5],
++    ['90s', 0.025],
++    ['weekly', 168],
++  ] as const)('supports the explicit %s period', (window, hours) => {
++    const state = quota({
++      groups: [
++        { displayName: 'Account usage', buckets: [{ window, remainingFraction: 1, resetTime }] },
++      ],
++    });
++    expect(laneFor(state).periodHours).toBe(hours);
++  });
++
++  test.each(['0d', '-1d', 'NaNd', '1e9d', '9999999999999999999d', 'credits'])(
++    'does not invent a duration for %s',
++    (window) => {
++      const state = quota({
++        groups: [
++          { displayName: 'Account usage', buckets: [{ window, remainingFraction: 1, resetTime }] },
++        ],
++      });
++      expect(laneFor(state).periodHours).toBeNull();
++    }
++  );
++
++  test.each([undefined, 'not-a-date'])(
++    'does not invent a reset date when it is missing or invalid',
++    (reset) => {
++      const state = quota({
++        groups: [
++          {
++            displayName: 'Account usage',
++            buckets: [{ window: '7d', remainingFraction: 0.42, resetTime: reset }],
++          },
++        ],
++      });
++      expect(laneFor(state).anchorMs).toBeNull();
++    }
++  );
 +});

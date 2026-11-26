@@ -1,0 +1,1106 @@
+diff --git a/src/features/quota/components/QuotaBalanceDetails.module.scss b/src/features/quota/components/QuotaBalanceDetails.module.scss
+new file mode 100644
+index 0000000..6580389
+--- /dev/null
++++ b/src/features/quota/components/QuotaBalanceDetails.module.scss
+@@ -0,0 +1,73 @@
++@use '../../../styles/mixins' as *;
++
++.details {
++  min-width: 0;
++  border-block: 1px solid var(--border-color);
++  font-size: 11px;
++}
++
++.trigger {
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  padding: 8px 0;
++  color: var(--text-secondary);
++  cursor: pointer;
++  list-style: none;
++
++  &::-webkit-details-marker {
++    display: none;
++  }
++  &:hover {
++    color: var(--text-primary);
++  }
++  &:focus-visible {
++    outline: 2px solid var(--primary-color);
++    outline-offset: 3px;
++    border-radius: 3px;
++  }
++}
++
++.value {
++  margin-left: auto;
++  font-family: $font-mono;
++  font-variant-numeric: tabular-nums;
++  color: var(--text-primary);
++  overflow-wrap: anywhere;
++  text-align: right;
++  min-width: 0;
++}
++
++.chevron {
++  flex-shrink: 0;
++}
++.details[open] .chevron {
++  transform: rotate(180deg);
++}
++.content {
++  display: flex;
++  flex-direction: column;
++  gap: 8px;
++  padding-bottom: 10px;
++}
++.row {
++  display: flex;
++  justify-content: space-between;
++  gap: 12px;
++  color: var(--text-secondary);
++}
++.row strong {
++  font-family: $font-mono;
++  color: var(--text-primary);
++  overflow-wrap: anywhere;
++  text-align: right;
++}
++.note {
++  margin: 0;
++  line-height: 1.5;
++  color: var(--text-tertiary);
++}
++
++[data-quota-glance] .details {
++  display: none;
++}
+diff --git a/src/features/quota/components/QuotaBalanceDetails.tsx b/src/features/quota/components/QuotaBalanceDetails.tsx
+new file mode 100644
+index 0000000..5713604
+--- /dev/null
++++ b/src/features/quota/components/QuotaBalanceDetails.tsx
+@@ -0,0 +1,52 @@
++import type { ReactNode } from 'react';
++import { useTranslation } from 'react-i18next';
++import { IconChevronDown } from '@/components/ui/icons';
++import styles from './QuotaBalanceDetails.module.scss';
++
++interface QuotaBalanceDetailsProps {
++  balance: string | number | null;
++  unlimited?: boolean;
++  preview?: ReactNode;
++  children?: ReactNode;
++}
++
++/** Read-only balance details shared by Codex and BPS in both quota hosts. */
++export function QuotaBalanceDetails({
++  balance,
++  unlimited = false,
++  children,
++  preview,
++}: QuotaBalanceDetailsProps) {
++  const { t } = useTranslation();
++  const value = unlimited
++    ? t('codex_quota.credit_unlimited')
++    : balance === null
++      ? t('quota_balance.unavailable')
++      : `${balance} ${t('quota_balance.credit_unit')}`;
++
++  return (
++    <details className={styles.details} data-quota-balance="">
++      <summary className={styles.trigger} aria-label={t('quota_balance.view') + ' · ' + value}>
++        <span>{t('quota_balance.view')}</span>
++        <span className={styles.value} title={value}>
++          {preview ?? (unlimited || balance === null ? value : balance)}
++        </span>
++        <IconChevronDown size={14} className={styles.chevron} aria-hidden="true" />
++      </summary>
++      <div className={styles.content}>
++        <div className={styles.row}>
++          <span>{t('quota_balance.label')}</span>
++          <strong>{value}</strong>
++        </div>
++        <p className={styles.note}>
++          {t(
++            balance === null && !unlimited
++              ? 'quota_balance.not_returned'
++              : 'quota_balance.credits_help'
++          )}
++        </p>
++        {children}
++      </div>
++    </details>
++  );
++}
+diff --git a/src/features/quota/providers/codex/CodexQuotaBody.tsx b/src/features/quota/providers/codex/CodexQuotaBody.tsx
+index 844e837..8859cbc 100644
+--- a/src/features/quota/providers/codex/CodexQuotaBody.tsx
++++ b/src/features/quota/providers/codex/CodexQuotaBody.tsx
+@@ -1,24 +1,16 @@
+ /**
+- * Codex 额度渲染体：套餐 chip 行（档位见 cardTier.ts）、宿主插槽、重置积分明细、用量窗口水位条。
++ * Codex quota body: plan chips, host slots, reset credits, usage windows and balance.
+  */
+ 
+ import { useMemo } from 'react';
+ import { useTranslation } from 'react-i18next';
+ import type { CodexQuotaState } from '@/types';
+-import {
+-  normalizePlanType,
+-  BUSINESS_PREMIUM_CODEX_PLAN_TYPE,
+-  PRO_CODEX_PLAN_TYPE,
+-  PRO_LITE_CODEX_PLAN_TYPES,
+-  PRO_MAX_CODEX_PLAN_TYPES,
+-  buildResetDisplay,
+-  formatInstantShort,
+-  parseIsoToMs,
+-  resolveResetMs,
+-} from '@/utils/quota';
++import { buildResetDisplay, formatInstantShort, parseIsoToMs, resolveResetMs } from '@/utils/quota';
+ import { resolveTimeZoneLabel } from '@/utils/time/timezone';
+ import { formatDateTimeValue } from '@/utils/format';
+ import { useNow } from '@/hooks/useNow';
++import { QuotaBalanceDetails } from '../../components/QuotaBalanceDetails';
++import { getCodexPlanLabel } from './planLabel';
+ import { QuotaMeter } from '../../components/QuotaMeter';
+ import { QuotaResetLabel } from '../../components/QuotaResetLabel';
+ import { collectQuotaRowInstants, pickUrgentRowId, resetCreditRowId } from '../../resetSchedule';
+@@ -49,22 +41,7 @@ export function CodexQuotaBody({
+   const rateLimitResetCredits = quota.rateLimitResetCredits ?? [];
+   const rateLimitResetCreditsError = quota.rateLimitResetCreditsError ?? '';
+ 
+-  const getPlanLabel = (pt?: string | null): string | null => {
+-    const normalized = normalizePlanType(pt);
+-    if (!normalized) return null;
+-    if (normalized === BUSINESS_PREMIUM_CODEX_PLAN_TYPE) {
+-      return t('codex_quota.plan_business_premium');
+-    }
+-    if (PRO_MAX_CODEX_PLAN_TYPES.has(normalized)) return t('codex_quota.plan_promax');
+-    if (normalized === PRO_CODEX_PLAN_TYPE) return t('codex_quota.plan_pro');
+-    if (PRO_LITE_CODEX_PLAN_TYPES.has(normalized)) return t('codex_quota.plan_prolite');
+-    if (normalized === 'plus') return t('codex_quota.plan_plus');
+-    if (normalized === 'team') return t('codex_quota.plan_team');
+-    if (normalized === 'free') return t('codex_quota.plan_free');
+-    return pt || normalized;
+-  };
+-
+-  const planLabel = getPlanLabel(planType);
++  const planLabel = getCodexPlanLabel(planType, t);
+   const planValueClass = planValueClassForTier(resolveCodexCardTier(planType), classes);
+ 
+   // Renewal was the one date on this card in a different shape (a full
+@@ -84,8 +61,6 @@ export function CodexQuotaBody({
+     <>
+       {(planLabel ||
+         expiryDisplay ||
+-        creditsUnlimited ||
+-        creditBalance !== null ||
+         rateLimitResetCreditsAvailableCount !== null ||
+         planItems) && (
+         <div className={classes.codexPlan}>
+@@ -104,16 +79,6 @@ export function CodexQuotaBody({
+               )}
+             </span>
+           )}
+-          {(creditsUnlimited || creditBalance !== null) && (
+-            <span className={classes.codexPlanItem}>
+-              <span className={classes.codexPlanLabel}>
+-                {t('codex_quota.credit_balance_label')}
+-              </span>
+-              <span className={classes.codexPlanValue}>
+-                {creditsUnlimited ? t('codex_quota.credit_unlimited') : creditBalance}
+-              </span>
+-            </span>
+-          )}
+           {rateLimitResetCreditsAvailableCount !== null && (
+             <span className={classes.codexPlanItem}>
+               <span className={classes.codexPlanLabel}>{t('codex_quota.reset_credits_label')}</span>
+@@ -126,6 +91,7 @@ export function CodexQuotaBody({
+         </div>
+       )}
+       {afterPlan}
++      <QuotaBalanceDetails balance={creditBalance} unlimited={creditsUnlimited} />
+       {rateLimitResetCredits.length > 0 ? (
+         <div className={classes.codexResetCredits}>
+           <div className={classes.codexResetCreditsTitle}>
+diff --git a/src/features/quota/providers/codex/planLabel.ts b/src/features/quota/providers/codex/planLabel.ts
+new file mode 100644
+index 0000000..1d65f9a
+--- /dev/null
++++ b/src/features/quota/providers/codex/planLabel.ts
+@@ -0,0 +1,23 @@
++import type { TFunction } from 'i18next';
++import {
++  normalizePlanType,
++  BUSINESS_PREMIUM_CODEX_PLAN_TYPE,
++  PRO_CODEX_PLAN_TYPE,
++  PRO_LITE_CODEX_PLAN_TYPES,
++  PRO_MAX_CODEX_PLAN_TYPES,
++} from '@/utils/quota';
++
++/** BPS exposes the same plan identifiers as Codex. */
++export function getCodexPlanLabel(plan: string | null | undefined, t: TFunction): string | null {
++  const normalized = normalizePlanType(plan);
++  if (!normalized) return null;
++  if (normalized === BUSINESS_PREMIUM_CODEX_PLAN_TYPE)
++    return t('codex_quota.plan_business_premium');
++  if (PRO_MAX_CODEX_PLAN_TYPES.has(normalized)) return t('codex_quota.plan_promax');
++  if (normalized === PRO_CODEX_PLAN_TYPE) return t('codex_quota.plan_pro');
++  if (PRO_LITE_CODEX_PLAN_TYPES.has(normalized)) return t('codex_quota.plan_prolite');
++  if (normalized === 'plus') return t('codex_quota.plan_plus');
++  if (normalized === 'team') return t('codex_quota.plan_team');
++  if (normalized === 'free') return t('codex_quota.plan_free');
++  return plan || normalized;
++}
+diff --git a/src/features/quota/providers/plugin/BpsQuotaBody.module.scss b/src/features/quota/providers/plugin/BpsQuotaBody.module.scss
+index d291864..0d6d0e7 100644
+--- a/src/features/quota/providers/plugin/BpsQuotaBody.module.scss
++++ b/src/features/quota/providers/plugin/BpsQuotaBody.module.scss
+@@ -1,119 +1,39 @@
+-.body {
++@use '../../../../styles/mixins' as *;
++
++.body,
++.group {
+   display: flex;
+   flex-direction: column;
+   gap: 10px;
+   min-width: 0;
+ }
+ 
+-.group {
++.estimate {
+   display: flex;
+   flex-direction: column;
+-  gap: 9px;
+-}
+-
+-.heading {
+-  display: flex;
+-  align-items: center;
+-  color: var(--text-tertiary);
+-  font-size: 11px;
+-  font-weight: 600;
+-}
+-
+-.window {
+-  min-width: 0;
++  gap: 5px;
+ }
+ 
+-.estimates {
++.amounts {
+   display: flex;
+   flex-wrap: wrap;
+-  gap: 4px 6px;
+-  margin-bottom: 5px;
+-}
+-
+-.stat {
+-  padding: 2px 5px;
+-  border-radius: $radius-sm;
+-  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+-  color: var(--text-tertiary);
+-  font-size: 10px;
+-  line-height: 1.5;
++  gap: 4px 12px;
++  color: var(--text-secondary);
+ 
+   strong {
+-    margin-left: 3px;
++    color: var(--text-primary);
+     font-family: $font-mono;
+     font-variant-numeric: tabular-nums;
+-    color: var(--text-secondary);
+-    font-weight: 550;
+   }
+ }
+ 
+-.pending {
+-  color: var(--text-tertiary);
+-  font-size: 10px;
+-  margin-bottom: 5px;
+-}
+-
+-.row {
+-  display: flex;
+-  align-items: center;
+-  flex-wrap: wrap;
+-  gap: 5px 7px;
+-  min-width: 0;
+-  font-size: 11px;
+-  font-variant-numeric: tabular-nums;
+-}
+-
+-.badge {
+-  min-width: 30px;
+-  max-width: 100px;
+-  padding: 2px 5px;
+-  border-radius: $radius-sm;
+-  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+-  color: var(--text-secondary);
+-  font-family: $font-mono;
+-  font-weight: 600;
+-  text-align: center;
+-  overflow: hidden;
+-  text-overflow: ellipsis;
+-  white-space: nowrap;
+-}
+-
+-.track {
+-  width: 60px;
+-  height: 6px;
+-  flex-shrink: 0;
+-  overflow: hidden;
+-  border-radius: $radius-full;
+-  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+-}
+-
+-.fill {
+-  height: 100%;
+-  background: currentColor;
+-  border-radius: inherit;
+-  transition: width 300ms var(--ease-out-strong, ease);
+-}
+-
+-.percent {
+-  white-space: nowrap;
+-}
+-.healthy {
+-  color: var(--viz-success);
+-}
+-.warning {
+-  color: var(--quota-medium-color);
+-}
+-.danger {
+-  color: var(--viz-failure);
+-}
+-.reset {
++.note {
++  margin: 0;
+   color: var(--text-tertiary);
+-  white-space: nowrap;
+   font-size: 10px;
++  line-height: 1.5;
+ }
+ 
+-@media (prefers-reduced-motion: reduce) {
+-  .fill {
+-    transition: none;
+-  }
++[data-quota-glance] .note {
++  display: none;
+ }
+diff --git a/src/features/quota/providers/plugin/BpsQuotaBody.tsx b/src/features/quota/providers/plugin/BpsQuotaBody.tsx
+index 93eaf4b..672d63d 100644
+--- a/src/features/quota/providers/plugin/BpsQuotaBody.tsx
++++ b/src/features/quota/providers/plugin/BpsQuotaBody.tsx
+@@ -1,15 +1,26 @@
+ import { useTranslation } from 'react-i18next';
+-import { InfoTip } from '@/components/ui/Tooltip';
+ import { useNow } from '@/hooks/useNow';
+ import { buildResetDisplay } from '@/utils/quota';
+ import type { PluginQuotaState } from '@/types';
+ import type { QuotaBodyProps } from '../../types';
++import { QuotaMeter } from '../../components/QuotaMeter';
++import { QuotaResetLabel } from '../../components/QuotaResetLabel';
++import { QuotaBalanceDetails } from '../../components/QuotaBalanceDetails';
++import { getCodexPlanLabel } from '../codex/planLabel';
++import { planValueClassForTier, resolveCodexCardTier } from '../../cardTier';
+ import { isBpsEstimateMetric } from './bpsQuota';
+ import styles from './BpsQuotaBody.module.scss';
+ 
+-export function BpsQuotaBody({ quota, classes }: QuotaBodyProps<PluginQuotaState>) {
++export function BpsQuotaBody({
++  quota,
++  classes,
++  planItems,
++  afterPlan,
++}: QuotaBodyProps<PluginQuotaState>) {
+   const { t, i18n } = useTranslation();
+-  const hasReset = quota.groups.some((group) => group.buckets.some((bucket) => bucket.resetTime));
++  const hasReset = quota.groups.some((group) =>
++    group.buckets.some((bucket) => bucket.resetTime || bucket.resetAtMs)
++  );
+   const now = useNow(hasReset || Boolean(quota.observedAt)) + (quota.serverTimeOffsetMs ?? 0);
+   const observed = Date.parse(quota.observedAt ?? '');
+   const stale =
+@@ -24,9 +35,18 @@ export function BpsQuotaBody({ quota, classes }: QuotaBodyProps<PluginQuotaState
+     resetCredits && Number.isSafeInteger(resetCredits.value) && resetCredits.value >= 0
+       ? resetCredits.value
+       : null;
++  const credit = quota.summary.find((metric) => metric.key === 'credits_balance');
++  const balance =
++    credit && Number.isFinite(credit.value) && credit.value >= 0 ? credit.value : null;
++  const unlimited = quota.groups.some(
++    (group) =>
++      group.label === 'Credits' &&
++      group.buckets.some((bucket) => bucket.description === 'Unlimited credits')
++  );
+   const summary = quota.summary.filter(
+     (metric) =>
+-      !isBpsEstimateMetric(metric) && metric.key !== 'rate_limit_reset_credits_available_count'
++      !isBpsEstimateMetric(metric) &&
++      !['rate_limit_reset_credits_available_count', 'credits_balance'].includes(metric.key)
+   );
+   const windowLabel = (window: string) => {
+     const match = /^(\d+)([dhms])$/.exec(window);
+@@ -43,141 +63,148 @@ export function BpsQuotaBody({ quota, classes }: QuotaBodyProps<PluginQuotaState
+     currency: 'USD',
+     currencyDisplay: 'narrowSymbol',
+   });
++  const estimates = quota.groups
++    .filter((group) => group.label === 'Account usage')
++    .flatMap((group) =>
++      group.buckets.map((bucket) => ({
++        id: bucket.id,
++        window: windowLabel(bucket.window || bucket.label),
++        estimate: bucket.window ? quota.bpsEstimates?.[bucket.window] : undefined,
++      }))
++    );
++  const preview =
++    balance === null && !unlimited && estimates.length === 1 && estimates[0].estimate
++      ? t('quota_balance.estimated_value', { value: money.format(estimates[0].estimate.remaining) })
++      : undefined;
+ 
+   return (
+-    <div className={styles.body} data-bps-quota-layout="compact-v1">
+-      <div className={classes.quotaMessage} role="status">
+-        {Number.isFinite(observed)
+-          ? t('plugin_quota.bps_updated_at', {
+-              time: new Date(observed).toLocaleString(i18n.resolvedLanguage),
+-            })
+-          : t('plugin_quota.bps_auto_refresh')}
+-        {stale && <span> · {t('plugin_quota.bps_stale_snapshot')}</span>}
+-      </div>
+-      {
+-        <div className={classes.codexPlan}>
+-          {plan && (
+-            <span className={classes.codexPlanItem} data-quota-plan="">
+-              <span className={classes.codexPlanLabel}>{t('plugin_quota.plan_label')}</span>
+-              <span className={classes.codexPlanValue}>{plan}</span>
++    <div className={styles.body} data-bps-quota-layout="codex-v1">
++      <div className={classes.codexPlan}>
++        {plan && (
++          <span className={classes.codexPlanItem} data-quota-plan="">
++            <span className={classes.codexPlanLabel}>{t('codex_quota.plan_label')}</span>
++            <span className={planValueClassForTier(resolveCodexCardTier(plan), classes)}>
++              {getCodexPlanLabel(plan, t)}
+             </span>
+-          )}
+-          <span className={classes.codexPlanItem} data-bps-reset-count="">
+-            <span className={classes.codexPlanLabel}>{t('codex_quota.reset_credits_label')}</span>
++          </span>
++        )}
++        <span className={classes.codexPlanItem} data-bps-reset-count="">
++          <span className={classes.codexPlanLabel}>{t('codex_quota.reset_credits_label')}</span>
++          <span className={classes.codexPlanValue}>
++            {resetCount === null ? t('plugin_quota.bps_unknown') : resetCount}
++          </span>
++        </span>
++        {summary.map((metric) => (
++          <span key={metric.key} className={classes.codexPlanItem}>
++            <span className={classes.codexPlanLabel}>{metric.label}</span>
+             <span className={classes.codexPlanValue}>
+-              {resetCount === null ? t('plugin_quota.bps_unknown') : resetCount}
++              {new Intl.NumberFormat(
++                i18n.resolvedLanguage,
++                metric.format === 'currency' && metric.currency
++                  ? { style: 'currency', currency: metric.currency }
++                  : { maximumFractionDigits: 2 }
++              ).format(metric.value)}
++              {metric.unit ? ' ' + metric.unit : ''}
+             </span>
+           </span>
+-          {summary.map((metric) => (
+-            <span key={metric.key} className={classes.codexPlanItem}>
+-              <span className={classes.codexPlanLabel}>
+-                {metric.key === 'credits_balance'
+-                  ? t('plugin_quota.bps_credit_balance')
+-                  : metric.label}
+-              </span>
+-              <span className={classes.codexPlanValue}>
+-                {new Intl.NumberFormat(
+-                  i18n.resolvedLanguage,
+-                  metric.format === 'currency' && metric.currency
+-                    ? { style: 'currency', currency: metric.currency }
+-                    : { maximumFractionDigits: 2 }
+-                ).format(metric.value)}
+-                {metric.unit
+-                  ? ` ${metric.unit === 'credits' ? t('plugin_quota.bps_credit_unit') : metric.unit}`
+-                  : ''}
+-              </span>
+-            </span>
+-          ))}
+-        </div>
+-      }
+-      {quota.groups.length === 0 && !plan && summary.length === 0 && resetCount === null && (
+-        <div className={classes.quotaMessage}>{t('plugin_quota.empty_data')}</div>
+-      )}
+-      {quota.groups.map((group) => {
+-        const account = group.label === 'Account usage';
+-        const groupLabel = account
+-          ? t('plugin_quota.bps_account_usage')
+-          : group.label === 'Code review'
+-            ? t('plugin_quota.bps_code_review')
+-            : group.label === 'Credits'
+-              ? t('plugin_quota.bps_credit_balance')
+-              : group.label;
+-        return (
++        ))}
++        {planItems}
++      </div>
++      {afterPlan}
++      <QuotaBalanceDetails balance={balance} unlimited={unlimited} preview={preview}>
++        {estimates.length > 0 && (
++          <>
++            <p className={styles.note}>{t('plugin_quota.bps_estimate_help')}</p>
++            {estimates.map(({ id, window, estimate }) => (
++              <div key={id} className={styles.estimate}>
++                <span className={classes.quotaModel}>{window}</span>
++                {estimate ? (
++                  <div className={styles.amounts}>
++                    <span>
++                      {t('plugin_quota.bps_estimated_remaining')}{' '}
++                      <strong>≈ {money.format(estimate.remaining)}</strong>
++                    </span>
++                    <span>
++                      {t('plugin_quota.bps_estimated_total')}{' '}
++                      <strong>≈ {money.format(estimate.total)}</strong>
++                    </span>
++                  </div>
++                ) : (
++                  <span className={styles.note}>{t('plugin_quota.bps_estimate_pending')}</span>
++                )}
++              </div>
++            ))}
++          </>
++        )}
++      </QuotaBalanceDetails>
++      {quota.groups
++        .filter((group) => group.label !== 'Credits')
++        .map((group) => (
+           <div key={group.id} className={styles.group}>
+-            <div className={styles.heading}>
+-              {groupLabel}
+-              {account && (
+-                <InfoTip
+-                  content={t('plugin_quota.bps_estimate_help')}
+-                  label={t('plugin_quota.bps_estimate_label')}
+-                />
+-              )}
+-            </div>
+-            {group.buckets.map((bucket) => {
+-              const used =
+-                Math.round((1 - Math.min(1, Math.max(0, bucket.remainingFraction))) * 1000) / 10;
++            {group.buckets.map((bucket, index) => {
++              const remaining = Number.isFinite(bucket.remainingFraction)
++                ? Math.min(100, Math.max(0, bucket.remainingFraction * 100))
++                : null;
+               const window = bucket.window || bucket.label;
+-              const estimate =
+-                account && bucket.window ? quota.bpsEstimates?.[bucket.window] : undefined;
++              const account = group.label === 'Account usage';
++              const label = account
++                ? window === '7d'
++                  ? t('codex_quota.secondary_window')
++                  : window === '5h'
++                    ? t('codex_quota.primary_window')
++                    : windowLabel(window)
++                : (group.label === 'Code review'
++                    ? t('plugin_quota.bps_code_review')
++                    : group.label) +
++                  ' · ' +
++                  windowLabel(window);
+               const resetAt =
+                 bucket.resetAtMs ?? (bucket.resetTime ? Date.parse(bucket.resetTime) : NaN);
+               const reset = Number.isFinite(resetAt)
+                 ? buildResetDisplay(null, resetAt, now, i18n.resolvedLanguage)
+                 : null;
+-              const tone =
+-                used >= 90 ? styles.danger : used >= 75 ? styles.warning : styles.healthy;
+-              const percent = t('plugin_quota.bps_used_percent', { percent: used });
+               return (
+-                <div key={bucket.id} className={styles.window} data-bps-window={window}>
+-                  {estimate ? (
+-                    <div className={styles.estimates}>
+-                      <span className={styles.stat}>
+-                        {t('plugin_quota.bps_estimated_remaining')}{' '}
+-                        <strong>≈ {money.format(estimate.remaining)}</strong>
+-                      </span>
+-                      <span className={styles.stat}>
+-                        {t('plugin_quota.bps_estimated_total')}{' '}
+-                        <strong>≈ {money.format(estimate.total)}</strong>
++                <div key={bucket.id} className={classes.quotaRow} data-bps-window={window}>
++                  <div className={classes.quotaRowHeader}>
++                    <span className={classes.quotaModel}>{label}</span>
++                    <div className={classes.quotaMeta}>
++                      <span className={classes.quotaPercent}>
++                        {remaining === null ? '--' : Math.round(remaining) + '%'}
+                       </span>
++                      {reset && <QuotaResetLabel display={reset} classes={classes} />}
+                     </div>
+-                  ) : account ? (
+-                    <div className={styles.pending}>{t('plugin_quota.bps_estimate_pending')}</div>
+-                  ) : null}
+-                  <div className={styles.row}>
+-                    <span className={styles.badge} title={windowLabel(window)}>
+-                      {windowLabel(window)}
+-                    </span>
+-                    <div
+-                      className={`${styles.track} ${tone}`}
+-                      role="progressbar"
+-                      aria-label={`${groupLabel} ${window}`}
+-                      aria-valuemin={0}
+-                      aria-valuemax={100}
+-                      aria-valuenow={used}
+-                      aria-valuetext={percent}
+-                    >
+-                      <div className={styles.fill} style={{ width: `${used}%` }} />
+-                    </div>
+-                    <span className={`${styles.percent} ${tone}`}>{percent}</span>
+-                    {reset && (
+-                      <span
+-                        className={styles.reset}
+-                        title={
+-                          bucket.resetTime
+-                            ? new Date(bucket.resetTime).toLocaleString(i18n.resolvedLanguage)
+-                            : undefined
+-                        }
+-                      >
+-                        {t('plugin_quota.bps_resets', { time: reset.relative || reset.absolute })}
+-                      </span>
+-                    )}
++                  </div>
++                  <div
++                    role="progressbar"
++                    aria-label={label}
++                    aria-valuemin={0}
++                    aria-valuemax={100}
++                    aria-valuenow={remaining === null ? undefined : remaining}
++                    aria-valuetext={
++                      remaining === null
++                        ? t('plugin_quota.bps_unknown')
++                        : t('quota_balance.remaining_percent', { percent: Math.round(remaining) })
++                    }
++                  >
++                    <QuotaMeter percent={remaining} classes={classes} index={index} />
+                   </div>
+                 </div>
+               );
+             })}
+           </div>
+-        );
+-      })}
++        ))}
++      {quota.groups.length === 0 && (
++        <div className={classes.quotaMessage}>{t('plugin_quota.empty_data')}</div>
++      )}
++      {(Number.isFinite(observed) || stale) && (
++        <div className={styles.note} role="status">
++          {Number.isFinite(observed) &&
++            t('plugin_quota.bps_updated_at', {
++              time: new Date(observed).toLocaleString(i18n.resolvedLanguage),
++            })}
++          {stale && <span> · {t('plugin_quota.bps_stale_snapshot')}</span>}
++        </div>
++      )}
+     </div>
+   );
+ }
+diff --git a/src/features/quota/providers/plugin/PluginQuotaBody.tsx b/src/features/quota/providers/plugin/PluginQuotaBody.tsx
+index ec380a2..02903b6 100644
+--- a/src/features/quota/providers/plugin/PluginQuotaBody.tsx
++++ b/src/features/quota/providers/plugin/PluginQuotaBody.tsx
+@@ -21,12 +21,20 @@ const formatMetric = (metric: PluginQuotaMetric): string => {
+   return metric.unit ? `${value} ${metric.unit}` : value;
+ };
+ 
+-export function PluginQuotaBody({ quota, classes }: QuotaBodyProps<PluginQuotaState>) {
++export function PluginQuotaBody({
++  quota,
++  classes,
++  planItems,
++  afterPlan,
++}: QuotaBodyProps<PluginQuotaState>) {
+   const { t } = useTranslation();
+   const plan =
+     quota.subscription?.tierName || quota.subscription?.plan || quota.subscription?.tierId;
+ 
+-  if (quota.pluginId === 'bps') return <BpsQuotaBody quota={quota} classes={classes} />;
++  if (quota.pluginId === 'bps')
++    return (
++      <BpsQuotaBody quota={quota} classes={classes} planItems={planItems} afterPlan={afterPlan} />
++    );
+ 
+   return (
+     <>
+diff --git a/src/i18n/locales/en.json b/src/i18n/locales/en.json
+index 8ab69a4..40130ee 100644
+--- a/src/i18n/locales/en.json
++++ b/src/i18n/locales/en.json
+@@ -2605,5 +2605,15 @@
+     "remove_pattern": "Remove regex row {{row}}",
+     "move_up": "Move regex row {{row}} up",
+     "move_down": "Move regex row {{row}} down"
++  },
++  "quota_balance": {
++    "view": "View balance",
++    "unavailable": "Not provided",
++    "not_returned": "The provider did not return a credit balance. This does not mean zero balance.",
++    "credits_help": "Credits are reported by the provider and are separate from subscription limits and quota reset credits.",
++    "estimated_value": "Estimated ≈ {{value}}",
++    "remaining_percent": "{{percent}}% remaining",
++    "credit_unit": "Credits",
++    "label": "Balance"
+   }
+ }
+diff --git a/src/i18n/locales/ko.json b/src/i18n/locales/ko.json
+index fd3b938..58ea2b5 100644
+--- a/src/i18n/locales/ko.json
++++ b/src/i18n/locales/ko.json
+@@ -2605,5 +2605,15 @@
+     "remove_pattern": "{{row}}행 정규식 규칙 삭제",
+     "move_up": "{{row}}행 정규식 규칙 위로 이동",
+     "move_down": "{{row}}행 정규식 규칙 아래로 이동"
++  },
++  "quota_balance": {
++    "view": "잔액 보기",
++    "unavailable": "제공되지 않음",
++    "not_returned": "제공자가 크레딧 잔액을 반환하지 않았습니다. 잔액이 0이라는 뜻은 아닙니다.",
++    "credits_help": "크레딧 잔액은 제공자가 보고하며 구독 한도 및 할당량 초기화 횟수와 별개입니다.",
++    "estimated_value": "추정 ≈ {{value}}",
++    "remaining_percent": "{{percent}}% 남음",
++    "credit_unit": "Credits",
++    "label": "잔액"
+   }
+ }
+diff --git a/src/i18n/locales/ru.json b/src/i18n/locales/ru.json
+index d3444a6..466e9f2 100644
+--- a/src/i18n/locales/ru.json
++++ b/src/i18n/locales/ru.json
+@@ -2623,5 +2623,15 @@
+     "remove_pattern": "Удалить правило regex {{row}}",
+     "move_up": "Переместить правило regex {{row}} вверх",
+     "move_down": "Переместить правило regex {{row}} вниз"
++  },
++  "quota_balance": {
++    "view": "Посмотреть баланс",
++    "unavailable": "Не предоставлен",
++    "not_returned": "Провайдер не вернул баланс кредитов. Это не означает нулевой баланс.",
++    "credits_help": "Баланс кредитов получен от провайдера и учитывается отдельно от лимитов подписки и кредитов сброса квоты.",
++    "estimated_value": "Оценка ≈ {{value}}",
++    "remaining_percent": "Осталось {{percent}}%",
++    "credit_unit": "Credits",
++    "label": "Баланс"
+   }
+ }
+diff --git a/src/i18n/locales/tr.json b/src/i18n/locales/tr.json
+index fee8d15..3e4dbba 100644
+--- a/src/i18n/locales/tr.json
++++ b/src/i18n/locales/tr.json
+@@ -2605,5 +2605,15 @@
+     "remove_pattern": "{{row}}. regex satırını sil",
+     "move_up": "{{row}}. regex satırını yukarı taşı",
+     "move_down": "{{row}}. regex satırını aşağı taşı"
++  },
++  "quota_balance": {
++    "view": "Bakiyeyi görüntüle",
++    "unavailable": "Sağlanmadı",
++    "not_returned": "Sağlayıcı kredi bakiyesini döndürmedi. Bu, bakiyenin sıfır olduğu anlamına gelmez.",
++    "credits_help": "Kredi bakiyesi sağlayıcı tarafından bildirilir; abonelik limitlerinden ve kota sıfırlama haklarından ayrıdır.",
++    "estimated_value": "Tahmini ≈ {{value}}",
++    "remaining_percent": "%{{percent}} kaldı",
++    "credit_unit": "Credits",
++    "label": "Bakiye"
+   }
+ }
+diff --git a/src/i18n/locales/vi.json b/src/i18n/locales/vi.json
+index 226b1fd..a050b88 100644
+--- a/src/i18n/locales/vi.json
++++ b/src/i18n/locales/vi.json
+@@ -2605,5 +2605,15 @@
+     "remove_pattern": "Xóa quy tắc regex dòng {{row}}",
+     "move_up": "Chuyển quy tắc regex dòng {{row}} lên",
+     "move_down": "Chuyển quy tắc regex dòng {{row}} xuống"
++  },
++  "quota_balance": {
++    "view": "Xem số dư",
++    "unavailable": "Chưa được cung cấp",
++    "not_returned": "Nhà cung cấp chưa trả về số dư tín dụng. Điều này không có nghĩa là số dư bằng không.",
++    "credits_help": "Số dư tín dụng do nhà cung cấp trả về, được thống kê riêng với hạn mức gói và số lần đặt lại hạn mức.",
++    "estimated_value": "Ước tính ≈ {{value}}",
++    "remaining_percent": "Còn {{percent}}%",
++    "credit_unit": "Credits",
++    "label": "Số dư"
+   }
+ }
+diff --git a/src/i18n/locales/zh-CN.json b/src/i18n/locales/zh-CN.json
+index b61bbda..5e0df63 100644
+--- a/src/i18n/locales/zh-CN.json
++++ b/src/i18n/locales/zh-CN.json
+@@ -2596,5 +2596,15 @@
+     "remove_pattern": "删除第 {{row}} 行正则规则",
+     "move_up": "上移第 {{row}} 行正则规则",
+     "move_down": "下移第 {{row}} 行正则规则"
++  },
++  "quota_balance": {
++    "view": "查看余额",
++    "unavailable": "未提供",
++    "not_returned": "上游未返回积分余额，不代表余额为零。",
++    "credits_help": "余额单位为 Credits，由上游返回，与套餐限额、主动重置次数分别统计。",
++    "estimated_value": "估算 ≈ {{value}}",
++    "remaining_percent": "剩余 {{percent}}%",
++    "credit_unit": "Credits",
++    "label": "余额"
+   }
+ }
+diff --git a/src/i18n/locales/zh-TW.json b/src/i18n/locales/zh-TW.json
+index 06d2cfd..f5bfc5e 100644
+--- a/src/i18n/locales/zh-TW.json
++++ b/src/i18n/locales/zh-TW.json
+@@ -2596,5 +2596,15 @@
+     "remove_pattern": "刪除第 {{row}} 列正規規則",
+     "move_up": "上移第 {{row}} 列正規規則",
+     "move_down": "下移第 {{row}} 列正規規則"
++  },
++  "quota_balance": {
++    "view": "查看餘額",
++    "unavailable": "未提供",
++    "not_returned": "上游未回傳積分餘額，不代表餘額為零。",
++    "credits_help": "餘額單位為 Credits，由上游回傳，與方案限額、主動重置次數分別統計。",
++    "estimated_value": "估算 ≈ {{value}}",
++    "remaining_percent": "剩餘 {{percent}}%",
++    "credit_unit": "Credits",
++    "label": "餘額"
+   }
+ }
+diff --git a/tests/bpsQuota.test.ts b/tests/bpsQuota.test.ts
+index a305f6f..af85b4c 100644
+--- a/tests/bpsQuota.test.ts
++++ b/tests/bpsQuota.test.ts
+@@ -55,7 +55,7 @@ const render = (quota: PluginQuotaState) =>
+     )
+   );
+ 
+-describe('BPS compact quota presentation', () => {
++describe('BPS Codex-style quota presentation', () => {
+   test('maps estimates by original window identity even when rendered order changes', () => {
+     expect(buildBpsQuotaEstimates(payload, summary)).toEqual({
+       '7d': { total: 100, remaining: 75 },
+@@ -65,16 +65,16 @@ describe('BPS compact quota presentation', () => {
+     quota.groups[0].buckets.reverse();
+     const markup = render(quota);
+     expect(markup).toContain('data-bps-window="7d"');
+-    expect(markup).toContain('aria-valuenow="25"');
+-    expect(markup).toContain('aria-valuenow="60"');
++    expect(markup).toContain('aria-valuenow="75"');
++    expect(markup).toContain('aria-valuenow="40"');
+     expect(markup.match(/≈/g)?.length).toBe(4);
+-    expect(markup).not.toContain('class="quotaBar"');
++    expect(markup).toContain('class="quotaBar"');
+     expect(markup).not.toContain('raw-estimate-total');
+     expect(markup).toContain('估算总额');
+-    expect(markup).toContain('已用 25%');
++    expect(markup).toContain('剩余 75%');
+   });
+ 
+-  test('renders empty and exhausted quotas in the correct used-percent direction', () => {
++  test('renders empty and exhausted quotas in the correct remaining-percent direction', () => {
+     const quota = state();
+     quota.groups = buildAntigravityQuotaGroups({
+       groups: [
+@@ -127,7 +127,7 @@ describe('BPS compact quota presentation', () => {
+       { key: 'credits_balance', label: 'Credits balance', value: 40, unit: 'credits' },
+     ];
+     const markup = render(quota);
+-    expect(markup).toContain('40 ' + chinese.t('plugin_quota.bps_credit_unit'));
++    expect(markup).toContain('40 ' + chinese.t('quota_balance.credit_unit'));
+     expect(markup).not.toContain('$40.00');
+   });
+ });
+diff --git a/tests/quotaBalanceDetails.test.ts b/tests/quotaBalanceDetails.test.ts
+new file mode 100644
+index 0000000..f633053
+--- /dev/null
++++ b/tests/quotaBalanceDetails.test.ts
+@@ -0,0 +1,130 @@
++import { describe, expect, test } from 'bun:test';
++import { createElement } from 'react';
++import { renderToStaticMarkup } from 'react-dom/server';
++import { I18nextProvider } from 'react-i18next';
++import i18n from '@/i18n';
++import { CodexQuotaBody } from '@/features/quota/providers/codex/CodexQuotaBody';
++import { BpsQuotaBody } from '@/features/quota/providers/plugin/BpsQuotaBody';
++import { buildBpsQuotaGroups } from '@/features/quota/providers/plugin/bpsQuota';
++import { QUOTA_CLASS_KEYS, bindQuotaClasses } from '@/features/quota/types';
++import type { CodexQuotaState, PluginQuotaState } from '@/types';
++
++const locale = i18n.cloneInstance({ lng: 'zh-CN' });
++const classes = bindQuotaClasses(
++  Object.fromEntries(QUOTA_CLASS_KEYS.map((key) => [key, key])),
++  'test'
++);
++const renderCodex = (extra: Partial<CodexQuotaState> = {}) =>
++  renderToStaticMarkup(
++    createElement(
++      I18nextProvider,
++      { i18n: locale },
++      createElement(CodexQuotaBody, {
++        classes,
++        quota: { status: 'success', windows: [], ...extra },
++      })
++    )
++  );
++const renderBps = (extra: Partial<PluginQuotaState> = {}) =>
++  renderToStaticMarkup(
++    createElement(
++      I18nextProvider,
++      { i18n: locale },
++      createElement(BpsQuotaBody, {
++        classes,
++        quota: { status: 'success', pluginId: 'bps', groups: [], summary: [], ...extra },
++      })
++    )
++  );
++
++describe('shared BPS and Codex balance details', () => {
++  test('both providers expose a collapsed, read-only balance disclosure when balance is unknown', () => {
++    for (const html of [renderCodex(), renderBps()]) {
++      expect(html).toContain('<details');
++      expect(html).toContain('data-quota-balance');
++      expect(html).toContain('查看余额');
++      expect(html).toContain('上游未返回积分余额，不代表余额为零。');
++      expect(html).not.toContain(' open');
++      expect(html).not.toContain('$0.00');
++    }
++  });
++  test('zero credit balances are distinct from unavailable balances for both providers', () => {
++    for (const html of [
++      renderCodex({ creditBalance: '0' }),
++      renderBps({
++        summary: [{ key: 'credits_balance', label: 'Credits', value: 0, unit: 'credits' }],
++      }),
++    ]) {
++      expect(html).toContain('0 Credits');
++      expect(html).not.toContain('未提供');
++    }
++  });
++  test('Codex preserves decimal credit precision without inventing a dollar conversion', () => {
++    const html = renderCodex({ creditBalance: '12.50' });
++    expect(html).toContain('12.50 Credits');
++    expect(html).not.toContain('$12.50');
++  });
++  test('BPS preserves upstream unlimited credits through localized group normalization', () => {
++    const groups = buildBpsQuotaGroups(
++      {
++        groups: [
++          {
++            displayName: 'Credits',
++            buckets: [
++              { window: 'credits', description: 'Unlimited credits', remainingFraction: 1 },
++            ],
++          },
++        ],
++      },
++      locale.t
++    );
++    for (const html of [renderCodex({ creditsUnlimited: true }), renderBps({ groups })]) {
++      expect(html).toContain('无限额');
++      expect(html).not.toContain('未提供');
++    }
++  });
++  test('BPS uses Codex labels and remaining bar thresholds without treating estimates as credits', () => {
++    const html = renderBps({
++      subscription: { plan: 'self_serve_business_prolite' },
++      groups: buildBpsQuotaGroups(
++        {
++          groups: [
++            { displayName: 'Account usage', buckets: [{ window: '7d', remainingFraction: 0.26 }] },
++          ],
++        },
++        locale.t
++      ),
++      bpsEstimates: { '7d': { total: 449.03, remaining: 116.75 } },
++    });
++    expect(html).not.toContain('self_serve_business_prolite');
++    expect(html).toContain(locale.t('codex_quota.plan_business_premium'));
++    expect(html).toContain('周限额');
++    expect(html).toContain('aria-valuenow="26"');
++    expect(html).toContain('quotaBarFillLow');
++    expect(html).toContain('估算 ≈ $116.75');
++    expect(html).toContain('上游未返回积分余额');
++    expect(html).not.toContain('116.75 Credits');
++  });
++  test('multiple overlapping window estimates are listed separately, never added together', () => {
++    const html = renderBps({
++      groups: buildBpsQuotaGroups(
++        {
++          groups: [
++            {
++              displayName: 'Account usage',
++              buckets: [
++                { window: '5h', remainingFraction: 0.5 },
++                { window: '7d', remainingFraction: 0.5 },
++              ],
++            },
++          ],
++        },
++        locale.t
++      ),
++      bpsEstimates: { '5h': { total: 40, remaining: 20 }, '7d': { total: 100, remaining: 50 } },
++    });
++    expect(html).toContain('$20.00');
++    expect(html).toContain('$50.00');
++    expect(html).not.toContain('$70.00');
++  });
++});
+diff --git a/tests/quotaBodyRendering.test.ts b/tests/quotaBodyRendering.test.ts
+index 3592dc3..aea4a2f 100644
+--- a/tests/quotaBodyRendering.test.ts
++++ b/tests/quotaBodyRendering.test.ts
+@@ -100,30 +100,32 @@ describe('CodexQuotaBody', () => {
+   });
+ 
+   test.each([
+-    ['en', 'Credit balance', 'Unlimited'],
+-    ['zh-CN', 'Credit 余额', '无限额'],
+-    ['zh-TW', 'Credit 餘額', '無限額'],
+-    ['ru', 'Остаток кредитов', 'Без ограничений'],
++    ['en', 'Unlimited'],
++    ['zh-CN', '无限额'],
++    ['zh-TW', '無限額'],
++    ['ru', 'Без ограничений'],
+   ])(
+     'renders account credits independently of manual resets in %s',
+-    async (language, label, unlimited) => {
++    async (language, unlimited) => {
+       await i18n.changeLanguage(language);
+       try {
+         const balance = renderToStaticMarkup(
+           createElement(CodexQuotaBody, { quota: { ...quota, creditBalance: '0' }, classes })
+         );
+-        expect(balance).toContain(label);
+-        expect(balance).toContain('<span class="codexPlanValue">0</span>');
++        expect(balance).toContain(i18n.t('quota_balance.label'));
++        expect(balance).toContain('0 ' + i18n.t('quota_balance.credit_unit'));
++        expect(balance).toContain('data-quota-balance');
+         const infinite = renderToStaticMarkup(
+           createElement(CodexQuotaBody, {
+             quota: { ...quota, creditBalance: null, creditsUnlimited: true },
+             classes,
+           })
+         );
+-        expect(infinite).toContain(label);
++        expect(infinite).toContain(i18n.t('quota_balance.label'));
+         expect(infinite).toContain(unlimited);
+         const absent = renderToStaticMarkup(createElement(CodexQuotaBody, { quota, classes }));
+-        expect(absent).not.toContain(label);
++        expect(absent).toContain(i18n.t('quota_balance.not_returned'));
++        expect(absent).toContain('data-quota-balance');
+       } finally {
+         await i18n.changeLanguage('en');
+       }

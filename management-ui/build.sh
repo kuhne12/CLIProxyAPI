@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a verified single-file panel from a pinned upstream and a focused patch.
+# Build a verified single-file panel from a pinned upstream and focused patches.
 set -euo pipefail
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 output=${1:?output HTML path required}
@@ -15,6 +15,8 @@ git -C "$source_dir" -c http.version=HTTP/1.1 fetch --depth=1 origin "$revision"
 git -C "$source_dir" checkout -q --detach FETCH_HEAD
 git -C "$source_dir" apply --check "$root/bps-quota.patch"
 git -C "$source_dir" apply "$root/bps-quota.patch"
+git -C "$source_dir" apply --check "$root/bps-quota-style.patch"
+git -C "$source_dir" apply "$root/bps-quota-style.patch"
 cd "$source_dir"
 bun=${BUN:-bun}
 test "$("$bun" --version)" = 1.4.3

@@ -242,7 +242,8 @@ func rebuildNativeHistoryCall(item object) (object, error) {
 			name = namespace + "." + name
 		}
 	}
-	envelope := object{"name": name}
+	var code string
+	summary := "Replay a previously requested client tool"
 	switch text(item["type"]) {
 	case "function_call":
 		arguments := item["arguments"]
@@ -254,22 +255,23 @@ func rebuildNativeHistoryCall(item object) (object, error) {
 		if args, ok := arguments.(object); !ok || args == nil {
 			return nil, fmt.Errorf("upstream history function arguments must be a JSON object")
 		}
-		envelope["arguments"] = arguments
+		encoded, err := json.Marshal(object{"name": name, "arguments": arguments})
+		if err != nil {
+			return nil, fmt.Errorf("upstream history tool arguments cannot be serialized")
+		}
+		code = string(encoded)
 	case "custom_tool_call":
 		input, ok := item["input"].(string)
 		if !ok {
 			return nil, fmt.Errorf("upstream history custom tool input must be a string")
 		}
-		envelope["input"] = input
+		code = input
+		summary = customTransportPrefix + name
 	default:
 		return nil, fmt.Errorf("upstream history recovery requires a function or custom tool call")
 	}
-	code, err := json.Marshal(envelope)
-	if err != nil {
-		return nil, fmt.Errorf("upstream history tool arguments cannot be serialized")
-	}
 	arguments, err := json.Marshal(object{
-		"code": string(code), "summary": "Replay a previously requested client tool",
+		"code": code, "summary": summary,
 		"extended_summary": "The supplied client history contains this tool call; consume its recorded result without repeating it.",
 		"destructive":      false, "references": []any{},
 	})

@@ -36,6 +36,7 @@ func (e *CodexExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth
 	}
 
 	doc := ojson.NewDoc(body)
+	helps.RestoreCodexCheckpointTools(doc)
 	if err = helps.ApplyRequestThinkingDoc(doc, req, opts, from.String(), to.String(), e.Identifier(), updatesChanged); err != nil {
 		return cliproxyexecutor.Response{}, err
 	}

@@ -297,9 +297,23 @@ func PrepareWithOptions(raw []byte, scope string, replay *ReplayCache, options P
 	if structured != nil {
 		protocol += "\n" + structured.instructions()
 	}
-	prologue = append(prologue, message("developer", protocol))
+	// A checkpoint can be from native Codex. Supply the complete current
+	// protocol in the visible suffix, including when the client disabled tools.
+	protocolAt := 0
+	for i, raw := range translated {
+		item, _ := raw.(object)
+		if text(item["type"]) == "compaction" && text(item["encrypted_content"]) != "" && (item["status"] == nil || text(item["status"]) == "completed") {
+			protocolAt = i + 1
+		}
+	}
+	translated = slices.Insert(translated, protocolAt, any(message("developer", protocol)))
 	if len(catalog) > 0 {
-		translated = append(translated, message("developer", clientToolGuard))
+		guardAt := len(translated)
+		last, _ := translated[guardAt-1].(object)
+		if text(last["type"]) == "compaction_trigger" {
+			guardAt--
+		}
+		translated = slices.Insert(translated, guardAt, any(message("developer", clientToolGuard)))
 	}
 	cacheKey := text(source["prompt_cache_key"])
 	turnEnd := 0

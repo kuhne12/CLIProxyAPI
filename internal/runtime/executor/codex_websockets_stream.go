@@ -941,6 +941,7 @@ func (e *CodexWebsocketsExecutor) prepareCodexWebsocketStream(ctx context.Contex
 	}
 	originalTranslated = helps.SetStringIfDifferent(originalTranslated, "model", baseModel)
 	doc := ojson.NewDoc(body)
+	helps.RestoreCodexCheckpointTools(doc)
 	if shouldPreserveFullCodexOpenAIInclude(ctx, auth, baseURL, opts.Headers) {
 		originalTranslated = helps.PreserveCodexOpenAIResponsesInclude(originalTranslated, originalPayload, from)
 		helps.PreserveCodexOpenAIResponsesIncludeDoc(doc, req.Payload, from)

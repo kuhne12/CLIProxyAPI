@@ -1,30 +1,83 @@
 package helps
 
 import (
+	"context"
 	"crypto/sha256"
+	"encoding/binary"
+	"fmt"
 	"io"
+	"math"
 	"strings"
+	"time"
 
 	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/cache"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/kvstore"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/bpsbridge"
 	log "github.com/sirupsen/logrus"
 )
 
 // Standalone compaction windows may contain retained items. Only an inline
 // checkpoint emitted by BPS can cover the input of the request that produced it.
-type bpsCheckpointKey struct {
-	scope string
-	id    [sha256.Size]byte
-	state [sha256.Size]byte
-}
+const bpsCheckpointTTL = 30 * 24 * time.Hour
 
 type bpsCoveredInput struct {
 	count  int
 	digest [sha256.Size]byte
 }
 
-var bpsCheckpoints = cache.NewBoundedLRU[bpsCheckpointKey, bpsCoveredInput](1024, nil)
+var bpsCheckpoints = cache.NewBoundedLRU[string, bpsCoveredInput](1024, nil)
+
+func bpsCheckpointKey(scope, id, encrypted string) string {
+	// The executor supplies the hash of the credential, caller and session.
+	return fmt.Sprintf("cpa:bps:checkpoint:v1:%s:%x:%x", scope, sha256.Sum256([]byte(id)), sha256.Sum256([]byte(encrypted)))
+}
+
+func storeBPSCheckpoint(ctx context.Context, key string, prefix bpsCoveredInput) string {
+	// Keep the first verified binding even when multiple instances see the same ID.
+	value := binary.BigEndian.AppendUint64(make([]byte, 0, 8+sha256.Size), uint64(prefix.count))
+	value = append(value, prefix.digest[:]...)
+	active, inserted, err := kvstore.KVSetNXRequired(ctx, key, value, bpsCheckpointTTL)
+	if err != nil {
+		return "kv_error"
+	}
+	if active {
+		if !inserted {
+			return "already_stored"
+		}
+		return "kv"
+	}
+	bpsCheckpoints.GetOrAdd(key, func() bpsCoveredInput { return prefix })
+	return "memory"
+}
+
+func lookupBPSCheckpoint(ctx context.Context, key string) (bpsCoveredInput, string) {
+	client, active, err := kvstore.CurrentKVClient()
+	if !active {
+		if prefix, ok := bpsCheckpoints.Get(key); ok {
+			return prefix, "memory"
+		}
+		return bpsCoveredInput{}, "memory_miss"
+	}
+	if err != nil {
+		return bpsCoveredInput{}, "kv_error"
+	}
+	raw, found, errGet := client.KVGet(ctx, key)
+	if errGet != nil {
+		return bpsCoveredInput{}, "kv_error"
+	}
+	if !found {
+		return bpsCoveredInput{}, "kv_miss"
+	}
+	if len(raw) != 8+sha256.Size {
+		return bpsCoveredInput{}, "kv_invalid"
+	}
+	count := binary.BigEndian.Uint64(raw[:8])
+	if count == 0 || count > math.MaxInt {
+		return bpsCoveredInput{}, "kv_invalid"
+	}
+	return bpsCoveredInput{count: int(count), digest: [sha256.Size]byte(raw[8:])}, "kv"
+}
 
 func bpsInputPrefix(items []ojson.Result) bpsCoveredInput {
 	h := sha256.New()
@@ -39,7 +92,7 @@ func bpsInputPrefix(items []ojson.Result) bpsCoveredInput {
 
 // PrepareBPSHistory retains explicit user instructions and adapter metadata.
 // The callback records only fingerprints, after a successful inline compaction.
-func PrepareBPSHistory(doc *ojson.Doc, scope string, options *bpsbridge.PrepareOptions, observation *BPSObservation) (func(string, string), error) {
+func PrepareBPSHistory(ctx context.Context, doc *ojson.Doc, scope string, options *bpsbridge.PrepareOptions, observation *BPSObservation) (func(string, string), error) {
 	input := doc.Get("input")
 	items := input.Array()
 	status, checkpoint := "no_checkpoint", ""
@@ -59,9 +112,18 @@ func PrepareBPSHistory(doc *ojson.Doc, scope string, options *bpsbridge.PrepareO
 		return nil, nil
 	}
 	remember := func(id, encrypted string) {
-		key := bpsCheckpointKey{scope, sha256.Sum256([]byte(id)), sha256.Sum256([]byte(encrypted))}
-		prefix := bpsInputPrefix(input.Array())
-		bpsCheckpoints.GetOrAdd(key, func() bpsCoveredInput { return prefix })
+		// An echo of an input checkpoint proves no new coverage.
+		for _, item := range items {
+			if item.Get("type").String() == "compaction" && item.Get("id").String() == id && item.Get("encrypted_content").String() == encrypted {
+				observation.recordDiagnostic(log.Fields{"compaction_confirmation": "replayed_checkpoint"})
+				return
+			}
+		}
+		if len(items) == 0 {
+			return
+		}
+		store := storeBPSCheckpoint(ctx, bpsCheckpointKey(scope, id, encrypted), bpsInputPrefix(items))
+		observation.recordDiagnostic(log.Fields{"compaction_store": store})
 		observation.ConfirmCompaction(id)
 	}
 	if !strings.Contains(input.Raw, "compaction") {
@@ -83,17 +145,14 @@ func PrepareBPSHistory(doc *ojson.Doc, scope string, options *bpsbridge.PrepareO
 		if id.Type != ojson.String || id.Str == "" || state.Type != ojson.String || state.Str == "" || (itemStatus.Exists() && itemStatus.String() != "completed") {
 			break
 		}
-		key := bpsCheckpointKey{scope, sha256.Sum256([]byte(id.Str)), sha256.Sum256([]byte(state.Str))}
+		prefix, source := lookupBPSCheckpoint(ctx, bpsCheckpointKey(scope, id.Str, state.Str))
+		observation.recordDiagnostic(log.Fields{"history_checkpoint_source": source})
 		status = "checkpoint_not_found"
-		if cacheEntries == 0 {
-			break
-		}
-		prefix, known := bpsCheckpoints.Get(key)
-		if known {
+		if prefix.count > 0 {
 			status = "prefix_mismatch"
 			covered = prefix.count
 		}
-		if known && prefix.count > 0 && prefix.count <= i && bpsInputPrefix(items[:prefix.count]) == prefix {
+		if prefix.count > 0 && prefix.count <= i && bpsInputPrefix(items[:prefix.count]) == prefix {
 			errTrim := trimBPSCoveredInput(doc, items, prefix.count, options)
 			status = "trimmed"
 			if errTrim != nil {

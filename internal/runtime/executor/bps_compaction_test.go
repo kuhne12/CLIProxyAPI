@@ -2,11 +2,16 @@ package executor
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/kvstore"
+	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 )
 
@@ -31,10 +36,12 @@ func TestBPSInlineCompactionReplay(t *testing.T) {
 			wire := make(chan []byte, 1)
 			e, _ := newBPSFixture(t, []string{completed.String()}, func(raw []byte) { wire <- raw })
 			auth := bpsFixtureAuth()
-			auth.ID = t.TempDir()
+			auth.ID = "bps-checkpoint-test"
+			identity := map[string]any{coreexecutor.CallerScopeMetadataKey: "caller", coreexecutor.CanonicalSessionIDMetadataKey: "session"}
 			send := func(input string) []byte {
 				t.Helper()
 				req, opts := bpsFixtureRequest(sdktranslator.FormatOpenAIResponse)
+				opts.Metadata = identity
 				doc := ojson.NewDoc(req.Payload)
 				if err := doc.SetRaw("input", "["+input+"]"); err != nil {
 					t.Fatal(err)
@@ -56,15 +63,52 @@ func TestBPSInlineCompactionReplay(t *testing.T) {
 				}
 				return <-wire
 			}
+			// Only the child sees the originating request. The parent starts with
+			// cold process state and reopens exactly the same database.
+			const seedEnv = "CPA_TEST_BPS_CHECKPOINT_SEED_DB"
+			dbPath := os.Getenv(seedEnv)
+			seed := dbPath != ""
+			if !seed {
+				dbPath = filepath.Join(t.TempDir(), "kv.db")
+				cmd := exec.CommandContext(t.Context(), os.Args[0], fmt.Sprintf("-test.run=^TestBPSInlineCompactionReplay$/^stream=%t$", stream))
+				cmd.Env = append(os.Environ(), seedEnv+"="+dbPath)
+				if out, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("seed process: %v\n%s", err, out)
+				}
+			}
+			if err := kvstore.ConfigureLocal(true, dbPath); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := kvstore.ShutdownLocal(); err != nil {
+					t.Error(err)
+				}
+			})
+			if seed {
+				if !strings.Contains(string(send(prefix)), "OLD_RESULT") {
+					t.Fatal("originating request lost history")
+				}
+				return
+			}
 			followup := prefix + "," + marker + `,{"type":"function_call_output","call_id":"cross-boundary","output":"late result"},{"role":"developer","content":"next instruction"}`
 			// Use a separate credential to measure the same follow-up on a miss.
 			originalID := auth.ID
 			auth.ID += "/cold"
 			full := send(followup)
 			auth.ID = originalID
-			initial := send(prefix)
-			if !strings.Contains(string(full), "OLD_RESULT") || !strings.Contains(string(initial), "OLD_RESULT") {
+			if !strings.Contains(string(full), "OLD_RESULT") {
 				t.Fatal("unverified history was dropped")
+			}
+			for _, field := range []string{coreexecutor.CallerScopeMetadataKey, coreexecutor.CanonicalSessionIDMetadataKey} {
+				original := identity[field]
+				identity[field] = "other"
+				if !strings.Contains(string(send(followup)), "OLD_RESULT") {
+					t.Fatalf("used checkpoint from a different %s", field)
+				}
+				identity[field] = original
+			}
+			if !strings.Contains(string(send(strings.Replace(followup, "KEEP_USER", "EDITED_USER", 1))), "OLD_RESULT") {
+				t.Fatal("edited prefix was trimmed after restart")
 			}
 			compact := send(followup)
 			input := ojson.GetBytes(compact, "input").Raw
@@ -84,7 +128,7 @@ func TestBPSInlineCompactionReplay(t *testing.T) {
 			if len(compact) >= len(full)-10000 {
 				t.Errorf("expected smaller WS create: %d -> %d bytes", len(full), len(compact))
 			}
-			t.Logf("same follow-up WS response.create: %d -> %d bytes", len(full), len(compact))
+			t.Logf("post-restart follow-up WS response.create: %d -> %d bytes", len(full), len(compact))
 
 			e.cfg.Payload.Override = []config.PayloadRule{{Models: []config.PayloadModelRule{{Name: "gpt-6-astra", Protocol: "codex"}}, Params: map[string]any{"input": []string{"policy"}}}}
 			if got := ojson.GetBytes(send(followup), "input.0").String(); got != "policy" {

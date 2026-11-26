@@ -255,7 +255,6 @@ func (e *BPSExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexe
 	}
 	// Default rules must recognize the caller's restored fields as explicit.
 	original := doc.Bytes()
-	helps.NormalizeBPSDelegationInputDoc(doc, opts)
 	_ = doc.Set("model", nativeModel)
 	if errThinking := helps.ApplyBPSRequestThinkingDoc(doc, req, opts, from.String(), modelInfo, translated.ConfigurationUpdatesChanged); errThinking != nil {
 		return nil, nil, errThinking
@@ -264,10 +263,13 @@ func (e *BPSExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexe
 	session, _ := opts.Metadata[coreexecutor.CanonicalSessionIDMetadataKey].(string)
 	scopeHash := sha256.Sum256([]byte(auth.ID + "\x00" + caller + "\x00" + session))
 	scope := hex.EncodeToString(scopeHash[:])
-	rememberCompaction, errHistory := helps.PrepareBPSHistory(doc, scope, &options, observation)
+	rememberCompaction, errHistory := helps.PrepareBPSHistory(ctx, doc, scope, &options, observation)
 	if errHistory != nil {
 		return nil, nil, fmt.Errorf("prepare compacted history: %w", errHistory)
 	}
+	// Fingerprint the client's history before process-local delegation proofs
+	// can change its representation. Compaction retains all agent messages.
+	helps.NormalizeBPSDelegationInputDoc(doc, opts)
 	if errImage := e.imageRelay.RewriteDoc(doc, scope, helps.BPSImageRelayOrigin(e.cfg)); errImage != nil {
 		status := http.StatusBadRequest
 		if errors.Is(errImage, bpsbridge.ErrImageRelayFull) || errors.Is(errImage, bpsbridge.ErrImageRelayStorage) {

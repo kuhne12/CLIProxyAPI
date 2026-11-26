@@ -93,9 +93,9 @@ var bpsTimingFieldOrder = []string{
 // upstream error events. Sensitive structured content is removed before logging.
 var bpsDiagnosticFieldOrder = []string{
 	"scope_hash", "tool_catalog_count", "tool_catalog_hash", "tool_catalog_names", "tool_catalog_names_truncated", "payload_input_unchanged",
-	"history_status", "history_checkpoint_id_hash", "history_cache_entries", "history_items_before", "history_items_after",
+	"history_status", "history_checkpoint_source", "history_checkpoint_id_hash", "history_cache_entries", "history_items_before", "history_items_after",
 	"history_bytes_before", "history_bytes_after", "history_covered_items", "history_agent_iteration_override",
-	"compaction_seen", "compaction_output_id_hash", "compaction_confirmation", "compaction_confirmed_id_hash",
+	"compaction_seen", "compaction_output_id_hash", "compaction_confirmation", "compaction_store", "compaction_confirmed_id_hash",
 	"validation_stage", "validation_reason", "validation_event", "validation_output_index", "validation_compaction_seen",
 	"pending_tool_count", "missing_tools", "native_tool_type", "native_tool_name", "client_tool_name",
 	"native_call_hash", "native_item_hash", "native_arguments_type", "native_arguments_bytes", "native_transport_shape",

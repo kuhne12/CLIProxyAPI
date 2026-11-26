@@ -79,7 +79,7 @@ var quotedLogFields = map[string]struct{}{
 
 var pluginPathFieldOrder = []string{"path", "active_path", "retired_path"}
 
-// BPS timing records contain only sizes, counts, statuses and local durations.
+// BPS timing records contain sizes, counts, statuses and local durations.
 var bpsTimingFieldOrder = []string{
 	"outcome", "input_bytes", "upstream_bytes", "ws_handshake_attempts", "ws_handshake_status",
 	"queue_ms", "prepare_ms", "ws_dial_ms", "ws_write_ms", "upstream_open_ms",
@@ -89,7 +89,22 @@ var bpsTimingFieldOrder = []string{
 	"terminal_handoff_ms", "response_ready_ms", "executor_done_ms",
 }
 
+// BPS diagnostics contain fixed validation messages and bounded structural
+// metadata, never request bodies, tool arguments or opaque checkpoint state.
+var bpsDiagnosticFieldOrder = []string{
+	"scope_hash", "tool_catalog_count", "tool_catalog_hash", "tool_catalog_names", "tool_catalog_names_truncated", "payload_input_unchanged",
+	"history_status", "history_checkpoint_id_hash", "history_cache_entries", "history_items_before", "history_items_after",
+	"history_bytes_before", "history_bytes_after", "history_covered_items", "history_agent_iteration_override",
+	"compaction_seen", "compaction_output_id_hash", "compaction_confirmation", "compaction_confirmed_id_hash",
+	"validation_stage", "validation_reason", "validation_event", "validation_output_index", "validation_compaction_seen",
+	"pending_tool_count", "missing_tools", "native_tool_type", "native_tool_name", "client_tool_name",
+	"native_call_hash", "native_item_hash", "native_arguments_type", "native_arguments_bytes", "native_transport_shape",
+}
+
 func formatLogFieldValue(key string, value any) string {
+	if key == "validation_reason" || key == "native_transport_shape" {
+		return strconv.Quote(fmt.Sprint(value))
+	}
 	if _, quoted := quotedLogFields[key]; quoted {
 		if stringValue, ok := value.(string); ok {
 			return strconv.Quote(stringValue)
@@ -132,6 +147,11 @@ func (m *LogFormatter) Format(entry *log.Entry) ([]byte, error) {
 		}
 		if entry.Data["provider"] == "bps" {
 			for _, k := range bpsTimingFieldOrder {
+				if v, ok := entry.Data[k]; ok {
+					fields = append(fields, fmt.Sprintf("%s=%s", k, formatLogFieldValue(k, v)))
+				}
+			}
+			for _, k := range bpsDiagnosticFieldOrder {
 				if v, ok := entry.Data[k]; ok {
 					fields = append(fields, fmt.Sprintf("%s=%s", k, formatLogFieldValue(k, v)))
 				}

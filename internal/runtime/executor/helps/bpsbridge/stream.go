@@ -13,6 +13,8 @@ import (
 
 type protocolError struct{ error }
 
+func (e protocolError) Unwrap() error { return e.error }
+
 type streamBody struct {
 	*io.PipeReader
 	upstream io.ReadCloser
@@ -48,7 +50,8 @@ func (b *Bridge) transform(reader io.Reader, writer io.Writer) error {
 	sequence := 0
 	terminal := false
 	emitted := make(map[string]bool)
-	pendingTools := make(map[string]bool)
+	pendingTools := make(map[string]string)
+	diagnostic := ProtocolDiagnostic{OutputIndex: -1, Stage: "read_event"}
 	emit := func(kind string, payload object) error {
 		payload["type"] = kind
 		payload["sequence_number"] = sequence
@@ -90,23 +93,30 @@ func (b *Bridge) transform(reader io.Reader, writer io.Writer) error {
 		if string(data) == "[DONE]" {
 			return nil
 		}
+		diagnostic.Stage = "decode_event"
+		diagnostic.EventType = diagnosticLabel(event)
 		var payload object
 		if decode(data, &payload) != nil || payload == nil {
-			return fmt.Errorf("invalid Basispoints SSE event")
+			return invalidResponse("invalid Basispoints SSE event")
 		}
 		kind := text(payload["type"])
 		if kind == "" {
 			kind = event
 		}
+		diagnostic.EventType = diagnosticLabel(kind)
+		diagnostic.Stage = "validate_event"
 		if b.structured != nil && kind == "response.completed" {
 			if response, ok := payload["response"].(object); !ok || response == nil {
-				return fmt.Errorf("basispoints structured output is missing its terminal response")
+				return invalidResponse("basispoints structured output is missing its terminal response")
 			}
 		}
 		if isToolEvent(kind) {
 			return nil
 		}
 		item, _ := payload["item"].(object)
+		if text(item["type"]) == "compaction" {
+			diagnostic.CompactionSeen = true
+		}
 		if b.structured != nil && isStructuredMessageEvent(kind, item) {
 			return nil
 		}
@@ -117,9 +127,9 @@ func (b *Bridge) transform(reader io.Reader, writer io.Writer) error {
 			// Only the terminal response contains the authoritative native item.
 			// Text keeps streaming; tool calls wait until the whole response validates.
 			if len(pendingTools) >= 1024 {
-				return fmt.Errorf("basispoints response contains too many tool items")
+				return invalidResponse("basispoints response contains too many tool items")
 			}
-			pendingTools[text(item["call_id"])+"\x00"+text(item["id"])] = true
+			pendingTools[text(item["call_id"])+"\x00"+text(item["id"])] = diagnosticLabel(text(item["name"]))
 			return nil
 		}
 		if response, ok := payload["response"].(object); ok {
@@ -132,6 +142,13 @@ func (b *Bridge) transform(reader io.Reader, writer io.Writer) error {
 				response["text"] = config
 			}
 			if kind == "response.completed" {
+				for _, raw := range responseOutput(response) {
+					item, _ := raw.(object)
+					if text(item["type"]) == "compaction" {
+						diagnostic.CompactionSeen = true
+					}
+				}
+				diagnostic.Stage = "structured_output"
 				if b.structured != nil {
 					if err := b.structured.validate(response); err != nil {
 						return err
@@ -144,12 +161,15 @@ func (b *Bridge) transform(reader io.Reader, writer io.Writer) error {
 						delete(pendingTools, text(item["call_id"])+"\x00"+text(item["id"]))
 					}
 				}
+				diagnostic.Stage = "terminal_tool_completeness"
 				if len(pendingTools) != 0 {
-					return fmt.Errorf("basispoints completed response omitted an original tool item")
+					return invalidResponse("basispoints completed response omitted an original tool item")
 				}
+				diagnostic.Stage = "tool_translation"
 				if err := b.translateResponse(response); err != nil {
 					return err
 				}
+				diagnostic.Stage = "validated_output_delivery"
 				output, _ = response["output"].([]any)
 				for i, raw := range output {
 					item, _ := raw.(object)
@@ -186,11 +206,13 @@ func (b *Bridge) transform(reader io.Reader, writer io.Writer) error {
 		terminal = kind == "response.completed" || kind == "response.incomplete" || kind == "response.failed" || kind == "error"
 		return emit(kind, payload)
 	}
+	processingFailed := false
 	err := readEvents(reader, func(event string, data []byte) error {
 		if terminal {
 			return io.EOF
 		}
 		if err := process(event, data); err != nil {
+			processingFailed = true
 			return protocolError{err}
 		}
 		if terminal {
@@ -203,6 +225,10 @@ func (b *Bridge) transform(reader io.Reader, writer io.Writer) error {
 		if errors.Is(err, io.ErrClosedPipe) || !errors.As(err, &invalid) {
 			return err
 		}
+		if !processingFailed {
+			diagnostic.Stage, diagnostic.EventType = "read_event", ""
+		}
+		b.reportProtocolError(err, diagnostic, pendingTools)
 		return emit("response.failed", object{"response": object{
 			"status": "failed", "output": []any{},
 			"error": object{"code": "basispoints_protocol_error", "message": err.Error()},
@@ -241,13 +267,13 @@ func readEvents(reader io.Reader, consume func(string, []byte) error) error {
 			_, _ = data.WriteString(strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
 			_ = data.WriteByte('\n')
 			if data.Len() > 16<<20 {
-				return protocolError{fmt.Errorf("basispoints SSE event exceeds 16 MiB")}
+				return protocolError{invalidResponse("basispoints SSE event exceeds 16 MiB")}
 			}
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		if errors.Is(err, bufio.ErrTooLong) {
-			return protocolError{fmt.Errorf("basispoints SSE line exceeds 16 MiB")}
+			return protocolError{invalidResponse("basispoints SSE line exceeds 16 MiB")}
 		}
 		return err
 	}

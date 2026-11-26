@@ -304,6 +304,44 @@ CPA 内部用量记录仍保留上游原始分类，便于核对。此设置仅�
 设置对新请求生效，进行中的流式请求保持开始时的设置；关闭后恢复原始分类。
 模型 ID 不变。
 
+## 压缩与工具响应诊断日志
+
+日志位于 **CPA 主程序的 BPS 原生执行器**。需要使用包含此修改的 CPA 构建；仅替换
+BPS 授权插件的共享库不会启用这些日志。无需新增插件配置，也无需开启完整请求体日志。
+
+正常 info 级别下，现有 `BPS request timing` 会额外记录：
+
+- 工具目录：`tool_catalog_count`、完整合并声明的 `tool_catalog_hash`，以及最多 64 个
+  排序后的工具名。目录哈希包含描述中的 exec helper 声明；描述正文不写日志。`scope_hash` 用于关联同一账号、调用方和会话作用域。
+- 历史裁剪：`history_status` 区分 `no_checkpoint`、`input_not_array`、
+  `checkpoint_not_found`、`invalid_checkpoint`、`checkpoint_without_prefix`、`prefix_mismatch`、`trimmed`、
+  `nothing_to_trim` 和 `trim_failed`；同时记录裁剪前后条目数、字节数、覆盖条目数、
+  缓存条目数、检查点 ID 哈希和 iteration 覆盖值。检查点缓存仅在内存中，重启会清空。
+- 压缩确认：`compaction_seen=true` 表示收到压缩项；`compaction_confirmation=confirmed`
+  表示终态通过验证并登记了检查点；`not_confirmed` 表示收到但未登记；
+  `payload_input_changed` 表示最终 payload 规则修改了输入，因此跳过确认。
+
+桥接校验失败时，会立即写一条 **`BPS response validation failed` warning**，保留具体的
+`validation_reason` 和阶段。例如 `tool_translation` 是工具还原失败，
+`terminal_tool_completeness` 是终态遗漏了此前的工具项，`structured_output` 是结构化输出
+校验失败。还会记录原生工具名称和类型、可解析的客户端目标工具名、参数类型和长度、
+传输封装形态、待确认工具数，以及最多 8 个遗漏工具的名称和身份哈希。
+warning 中的压缩状态可能仍为 `pending_validation`，应结合结束时的 timing 日志判断。
+
+按 CPA 请求 ID 关联 warning、timing 和访问日志即可排查；客户端收到的错误文案不变。
+例如查阅日志文件（路径按实际配置调整）：
+
+```sh
+rg 'BPS response validation failed|BPS request timing' logs/main.log
+rg '\[请求短ID\]' logs/main.log
+```
+
+日志不包含提示词、代码正文、工具参数值、凭据、加密压缩内容或外部解析器原始错误。
+检查点和调用身份使用 SHA-256 哈希；过长或格式异常的工具名也只记录哈希。
+`native_arguments_bytes=-1` 表示原生参数不是字符串，未计算序列化大小。
+工具目录来自最终 payload 规则应用前的桥接目录；`payload_input_unchanged=false`
+表示最终规则改动了输入。日志本身不修改请求、压缩阈值、工具校验、重试或超时策略。
+
 ## 当前范围
 
 - 已实现授权、导入、统一保存、手动刷新、模型注册、原生推理、用量统计和账户额度查询；不自动定时刷新。

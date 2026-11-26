@@ -124,13 +124,13 @@ func (s *structuredOutput) validate(response object) error {
 			case "output_text":
 				value, ok := part["text"].(string)
 				if !ok || answer.Len()+len(value) > 16<<20 {
-					return fmt.Errorf("basispoints structured output text is invalid or exceeds 16 MiB")
+					return invalidResponse("basispoints structured output text is invalid or exceeds 16 MiB")
 				}
 				_, _ = answer.WriteString(value)
 			case "refusal":
 				hasRefusal = true
 			default:
-				return fmt.Errorf("basispoints structured output contains unsupported message content")
+				return invalidResponse("basispoints structured output contains unsupported message content")
 			}
 		}
 	}
@@ -141,10 +141,10 @@ func (s *structuredOutput) validate(response object) error {
 	}
 	var instance any
 	if err := decode([]byte(answer.String()), &instance); err != nil {
-		return fmt.Errorf("basispoints structured output is not one valid JSON value")
+		return invalidResponse("basispoints structured output is not one valid JSON value")
 	}
 	if s.schema != nil && s.schema.Validate(instance) != nil {
-		return fmt.Errorf("basispoints structured output does not satisfy the requested JSON schema")
+		return invalidResponse("basispoints structured output does not satisfy the requested JSON schema")
 	}
 	return nil
 }

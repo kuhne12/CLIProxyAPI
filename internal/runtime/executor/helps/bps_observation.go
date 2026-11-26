@@ -14,21 +14,22 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// BPSObservation retains only sizes, counts and local monotonic timings. Milestone
+// BPSObservation retains bounded diagnostics and local monotonic timings. Milestone
 // fields are offsets from executor entry, while stage fields are durations.
 // Missing observations are omitted, rather than reported as measured zeros.
 type BPSObservation struct {
-	mu         sync.Mutex
-	now        func() time.Time
-	started    time.Time
-	stages     map[string]time.Duration
-	milestones map[string]time.Duration
-	inputBytes int
-	wireBytes  int
-	attempts   int
-	status     int
-	terminal   string
-	finishOnce sync.Once
+	mu          sync.Mutex
+	now         func() time.Time
+	started     time.Time
+	stages      map[string]time.Duration
+	milestones  map[string]time.Duration
+	inputBytes  int
+	wireBytes   int
+	attempts    int
+	status      int
+	terminal    string
+	finishOnce  sync.Once
+	diagnostics log.Fields
 }
 
 func NewBPSObservation(inputBytes int) *BPSObservation {
@@ -101,10 +102,14 @@ func (o *BPSObservation) observeUpstream(data []byte) {
 	case "response.function_call_arguments.done", "response.custom_tool_call_input.done":
 		o.Mark("upstream_tool_arguments_done")
 	case "response.output_item.done":
+		o.observeCompaction(ojson.GetBytes(data, "item"))
 		if isBPSClientTool(ojson.GetBytes(data, "item.type").String()) {
 			o.Mark("upstream_tool_item_done")
 		}
 	case "response.completed", "response.incomplete", "response.failed", "error":
+		for _, item := range ojson.GetBytes(data, "response.output").Array() {
+			o.observeCompaction(item)
+		}
 		o.Mark("upstream_terminal")
 		o.mu.Lock()
 		o.terminal = kind
@@ -149,6 +154,9 @@ func (o *BPSObservation) fields() log.Fields {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	fields := log.Fields{"input_bytes": o.inputBytes, "ws_handshake_attempts": o.attempts}
+	for key, value := range o.diagnostics {
+		fields[key] = value
+	}
 	if o.wireBytes != 0 {
 		fields["upstream_bytes"] = o.wireBytes
 	}
@@ -201,6 +209,9 @@ func (o *BPSObservation) Finish(ctx context.Context, err error) {
 	o.finishOnce.Do(func() {
 		o.Mark("executor_done")
 		fields := o.fields()
+		if fields["compaction_confirmation"] == "pending_validation" {
+			fields["compaction_confirmation"] = "not_confirmed"
+		}
 		fields["provider"] = "bps"
 		fields["outcome"] = "completed"
 		if err != nil {

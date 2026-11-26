@@ -8,6 +8,7 @@ import (
 	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/cache"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/bpsbridge"
+	log "github.com/sirupsen/logrus"
 )
 
 // Standalone compaction windows may contain retained items. Only an inline
@@ -38,34 +39,69 @@ func bpsInputPrefix(items []ojson.Result) bpsCoveredInput {
 
 // PrepareBPSHistory retains explicit user instructions and adapter metadata.
 // The callback records only fingerprints, after a successful inline compaction.
-func PrepareBPSHistory(doc *ojson.Doc, scope string, options *bpsbridge.PrepareOptions) (func(string, string), error) {
+func PrepareBPSHistory(doc *ojson.Doc, scope string, options *bpsbridge.PrepareOptions, observation *BPSObservation) (func(string, string), error) {
 	input := doc.Get("input")
+	items := input.Array()
+	status, checkpoint := "no_checkpoint", ""
+	covered := 0
+	cacheEntries := bpsCheckpoints.Len()
+	defer func() {
+		after := doc.Get("input")
+		observation.recordDiagnostic(log.Fields{
+			"history_status": status, "history_checkpoint_id_hash": checkpoint, "history_cache_entries": cacheEntries,
+			"history_items_before": len(items), "history_items_after": len(after.Array()),
+			"history_bytes_before": len(input.Raw), "history_bytes_after": len(after.Raw),
+			"history_covered_items": covered, "history_agent_iteration_override": options.AgentIteration,
+		})
+	}()
 	if !input.IsArray() {
+		status = "input_not_array"
 		return nil, nil
 	}
 	remember := func(id, encrypted string) {
 		key := bpsCheckpointKey{scope, sha256.Sum256([]byte(id)), sha256.Sum256([]byte(encrypted))}
 		prefix := bpsInputPrefix(input.Array())
 		bpsCheckpoints.GetOrAdd(key, func() bpsCoveredInput { return prefix })
+		observation.ConfirmCompaction(id)
 	}
-	if bpsCheckpoints.Len() == 0 || !strings.Contains(input.Raw, "compaction") {
+	if !strings.Contains(input.Raw, "compaction") {
 		return remember, nil
 	}
-	items := input.Array()
-	for i := len(items) - 1; i > 0; i-- {
+	for i := len(items) - 1; i >= 0; i-- {
 		item := items[i]
 		if item.Get("type").String() != "compaction" {
 			continue
 		}
 		id, state := item.Get("id"), item.Get("encrypted_content")
-		status := item.Get("status")
-		if id.Type != ojson.String || id.Str == "" || state.Type != ojson.String || state.Str == "" || (status.Exists() && status.String() != "completed") {
+		checkpoint = bpsbridge.DiagnosticHash(id.String())
+		if i == 0 {
+			status = "checkpoint_without_prefix"
+			break
+		}
+		status = "invalid_checkpoint"
+		itemStatus := item.Get("status")
+		if id.Type != ojson.String || id.Str == "" || state.Type != ojson.String || state.Str == "" || (itemStatus.Exists() && itemStatus.String() != "completed") {
 			break
 		}
 		key := bpsCheckpointKey{scope, sha256.Sum256([]byte(id.Str)), sha256.Sum256([]byte(state.Str))}
+		status = "checkpoint_not_found"
+		if cacheEntries == 0 {
+			break
+		}
 		prefix, known := bpsCheckpoints.Get(key)
+		if known {
+			status = "prefix_mismatch"
+			covered = prefix.count
+		}
 		if known && prefix.count > 0 && prefix.count <= i && bpsInputPrefix(items[:prefix.count]) == prefix {
-			return remember, trimBPSCoveredInput(doc, items, prefix.count, options)
+			errTrim := trimBPSCoveredInput(doc, items, prefix.count, options)
+			status = "trimmed"
+			if errTrim != nil {
+				status = "trim_failed"
+			} else if doc.Get("input").Raw == input.Raw {
+				status = "nothing_to_trim"
+			}
+			return remember, errTrim
 		}
 		break
 	}

@@ -404,6 +404,47 @@ tool arguments, tokens, cookies, or raw upstream errors enter these observations
 This instrumentation does not alter request payloads, tool delivery, retries, or
 network timeout behavior.
 
+### Compaction and response validation diagnostics
+
+These diagnostics run in CPA's native BPS executor. Install a CPA server build
+containing this change; replacing only the BPS authorization shared library does
+not enable them. No plugin configuration or full request logging is required.
+At the normal info level, `BPS request timing` also records:
+
+- `scope_hash` for the isolated account/caller/session scope, and the bridge's
+  `tool_catalog_count`, `tool_catalog_hash`, and up to 64 sorted tool names.
+  The hash covers the complete merged declarations, including descriptions of exec helpers, even when
+  names are truncated.
+- `history_status`: `no_checkpoint`, `input_not_array`, `checkpoint_not_found`,
+  `invalid_checkpoint`, `checkpoint_without_prefix`, `prefix_mismatch`, `trimmed`, `nothing_to_trim`, or
+  `trim_failed`. Item/byte counts before and after trimming, covered item count,
+  cache entry count, checkpoint ID hash and iteration override explain the choice.
+  Checkpoints live only in process memory; restart clears this cache.
+- `compaction_seen` and `compaction_confirmation`: `confirmed` means the validated
+  terminal response registered a checkpoint; `not_confirmed` means a checkpoint
+  was received but not registered; `payload_input_changed` means final payload
+  rules changed the input and made confirmation unsafe. While a request is still
+  being validated, a warning may show `pending_validation`.
+
+A bridge validation failure immediately writes one warning,
+`BPS response validation failed`, before the public error is normalized. It
+includes `validation_stage`, a locally authored `validation_reason`, native tool
+type/name, decoded client tool name when available, argument size/type, transport
+shape, pending tool count and at most eight missing tool name/identity hashes.
+Use the normal CPA request ID to join this warning with its timing record and
+access log. A `tool_translation` failure differs from
+`terminal_tool_completeness` (an earlier tool item is absent from the terminal
+output) and `structured_output` validation failure. The client-facing error
+remains unchanged.
+
+These logs contain no prompts, code, argument values, credentials, encrypted
+compaction state or raw external parser errors. Checkpoint/call/item identities
+are SHA-256 hashes; invalid or overlong tool names are hashed. Argument byte size
+is `-1` when the native argument value is not a string. An unclassified internal
+error is reported with a generic reason rather than logging its raw message.
+The bridge catalog is collected before final payload rules;
+`payload_input_unchanged=false` identifies input changes made by those rules.
+
 ## Scope and compatibility
 
 - Authorization, import, persistence, manual refresh, model registration and

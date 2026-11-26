@@ -10,11 +10,12 @@ import (
 )
 
 type tool struct {
-	Name       string
-	Namespace  string
-	Kind       string
-	Definition string
-	Parameters object
+	Name            string
+	Namespace       string
+	Kind            string
+	Definition      string
+	DeclarationHash string
+	Parameters      object
 }
 
 type replayEntry struct {
@@ -205,7 +206,8 @@ func (b *Bridge) collectTools(value any, namespace string) ([]any, error) {
 			continue
 		}
 		parameters, _ := entry["parameters"].(object)
-		b.tools[key] = tool{Name: name, Namespace: namespace, Kind: kind, Definition: definition, Parameters: parameters}
+		b.tools[key] = tool{Name: name, Namespace: namespace, Kind: kind, Definition: definition, Parameters: parameters,
+			DeclarationHash: fingerprint(object{"declaration": entry, "strict": item["strict"]})}
 		catalog = append(catalog, entry)
 	}
 	return catalog, nil
@@ -400,10 +402,10 @@ func (b *Bridge) translateCall(native object) (object, error) {
 	if value, ok := native["arguments"].(object); ok {
 		arguments = value
 	} else if err := decode([]byte(text(native["arguments"])), &arguments); err != nil {
-		return nil, fmt.Errorf("basispoints returned invalid tool transport arguments")
+		return nil, invalidResponse("basispoints returned invalid tool transport arguments")
 	}
 	if arguments == nil {
-		return nil, fmt.Errorf("basispoints returned empty tool transport arguments")
+		return nil, invalidResponse("basispoints returned empty tool transport arguments")
 	}
 	envelope, marked, err := customTransportEnvelope(arguments)
 	if !marked && err == nil {
@@ -423,7 +425,7 @@ func (b *Bridge) translateCall(native object) (object, error) {
 	}
 	info, allowed := b.tools[toolName]
 	if !allowed {
-		return nil, fmt.Errorf("basispoints returned a tool outside the client's catalog")
+		return nil, invalidResponse("basispoints returned a tool outside the client's catalog")
 	}
 	result, err := b.finishClientToolCall(native, info, envelope, marked)
 	if err != nil {
@@ -450,27 +452,27 @@ func (b *Bridge) translateDirectCatalogCall(native object) (object, error) {
 		}
 	}
 	if !ok {
-		return nil, fmt.Errorf("basispoints returned an unsupported native tool; no tool was executed")
+		return nil, invalidResponse("basispoints returned an unsupported native tool; no tool was executed")
 	}
 	kind := text(native["type"])
 	var envelope object
 	switch info.Kind {
 	case "function":
 		if kind != "function_call" {
-			return nil, fmt.Errorf("basispoints returned client function tool %q as a %q; no tool was executed", info.Name, kind)
+			return nil, validationError{error: fmt.Errorf("basispoints returned client function tool %q as a %q; no tool was executed", info.Name, kind), reason: "basispoints returned client function tool with incompatible call type"}
 		}
 		envelope = object{"name": info.Name, "arguments": native["arguments"]}
 	case "custom":
 		if kind != "custom_tool_call" {
-			return nil, fmt.Errorf("basispoints returned client custom tool %q as a %q; no tool was executed", info.Name, kind)
+			return nil, validationError{error: fmt.Errorf("basispoints returned client custom tool %q as a %q; no tool was executed", info.Name, kind), reason: "basispoints returned client custom tool with incompatible call type"}
 		}
 		input, ok := native["input"].(string)
 		if !ok {
-			return nil, fmt.Errorf("basispoints direct custom tool input must be a string")
+			return nil, invalidResponse("basispoints direct custom tool input must be a string")
 		}
 		envelope = object{"name": info.Name, "input": input}
 	default:
-		return nil, fmt.Errorf("basispoints returned an unsupported native tool; no tool was executed")
+		return nil, invalidResponse("basispoints returned an unsupported native tool; no tool was executed")
 	}
 	result, err := b.finishClientToolCall(native, info, envelope, false)
 	if err != nil {
@@ -492,11 +494,11 @@ func (b *Bridge) translateDirectCatalogCall(native object) (object, error) {
 // how the call replays upstream.
 func (b *Bridge) finishClientToolCall(native object, info tool, envelope object, marked bool) (object, error) {
 	if marked && info.Kind != "custom" {
-		return nil, fmt.Errorf("basispoints raw transport requires a declared custom tool")
+		return nil, invalidResponse("basispoints raw transport requires a declared custom tool")
 	}
 	id := text(native["call_id"])
 	if id == "" {
-		return nil, fmt.Errorf("basispoints tool call is missing call_id")
+		return nil, invalidResponse("basispoints tool call is missing call_id")
 	}
 	itemID := text(native["id"])
 	if itemID == "" {
@@ -510,16 +512,16 @@ func (b *Bridge) finishClientToolCall(native object, info tool, envelope object,
 		value, hasInput := envelope["input"]
 		if alias, hasAlias := envelope["args"]; hasAlias {
 			if hasInput {
-				return nil, fmt.Errorf("basispoints custom tool envelope contains conflicting input fields")
+				return nil, invalidResponse("basispoints custom tool envelope contains conflicting input fields")
 			}
 			value = alias
 		}
 		if _, exists := envelope["arguments"]; exists {
-			return nil, fmt.Errorf("basispoints custom tools require input text, not arguments")
+			return nil, invalidResponse("basispoints custom tools require input text, not arguments")
 		}
 		input, ok := value.(string)
 		if !ok {
-			return nil, fmt.Errorf("basispoints custom tool input must be a string")
+			return nil, invalidResponse("basispoints custom tool input must be a string")
 		}
 		result["type"] = "custom_tool_call"
 		result["id"] = "ctc_" + fingerprint(id)
@@ -531,11 +533,11 @@ func (b *Bridge) finishClientToolCall(native object, info tool, envelope object,
 		}
 		if raw, ok := args.(string); ok {
 			if decode([]byte(raw), &args) != nil {
-				return nil, fmt.Errorf("basispoints function arguments are invalid JSON")
+				return nil, invalidResponse("basispoints function arguments are invalid JSON")
 			}
 		}
 		if _, ok := args.(object); !ok {
-			return nil, fmt.Errorf("basispoints function arguments must be an object")
+			return nil, invalidResponse("basispoints function arguments must be an object")
 		}
 		encoded, _ := json.Marshal(args)
 		result["arguments"] = string(encoded)
@@ -553,7 +555,7 @@ func (b *Bridge) translateResponse(response object) error {
 		if isTool(item) {
 			translated, err := b.translateCall(item)
 			if err != nil {
-				return err
+				return toolResponseError{error: err, tool: describeTool(item), index: i}
 			}
 			output[i] = translated
 		}

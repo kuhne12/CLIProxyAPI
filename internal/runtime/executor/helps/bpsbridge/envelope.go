@@ -51,7 +51,7 @@ func decodeTransportCode(value any) (object, error) {
 		}
 		break
 	}
-	return nil, fmt.Errorf("basispoints tool transport code must contain one JSON client-tool envelope; OfficeJS and multiple calls are unsupported (%s)", transportShape(original))
+	return nil, invalidResponse(fmt.Sprintf("basispoints tool transport code must contain one JSON client-tool envelope; OfficeJS and multiple calls are unsupported (%s)", transportShape(original)))
 }
 
 // Report only structural facts, never client code, prompts or tool arguments.
@@ -141,17 +141,17 @@ func decodeTransportEnvelope(value any) (object, error) {
 		if raw, ok := args.(string); ok {
 			var parsed object
 			if decode([]byte(raw), &parsed) != nil {
-				return nil, fmt.Errorf("basispoints nested transport arguments must be one JSON object")
+				return nil, invalidResponse("basispoints nested transport arguments must be one JSON object")
 			}
 			args = parsed
 		}
 		outer, ok := args.(object)
 		if !ok {
-			return nil, fmt.Errorf("basispoints nested transport arguments must be an object")
+			return nil, invalidResponse("basispoints nested transport arguments must be an object")
 		}
 		value = outer["code"]
 	}
-	return nil, fmt.Errorf("basispoints tool transport exceeds two nested wrappers")
+	return nil, invalidResponse("basispoints tool transport exceeds two nested wrappers")
 }
 
 var embeddedToolCall = regexp.MustCompile(`(?:^|\s)(?:await\s+|return\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*\(`)
@@ -220,7 +220,7 @@ func envelopeName(envelope object) (string, error) {
 	name := text(envelope["name"])
 	alias := text(envelope["tool"])
 	if name != "" && alias != "" && name != alias {
-		return "", fmt.Errorf("basispoints tool envelope contains conflicting names")
+		return "", invalidResponse("basispoints tool envelope contains conflicting names")
 	}
 	if name == "" {
 		name = alias
@@ -232,7 +232,7 @@ func envelopeArguments(envelope object) (any, error) {
 	args, exists := envelope["arguments"]
 	alias, hasAlias := envelope["args"]
 	if exists && hasAlias {
-		return nil, fmt.Errorf("basispoints tool envelope contains conflicting argument fields")
+		return nil, invalidResponse("basispoints tool envelope contains conflicting argument fields")
 	}
 	if !exists {
 		args = alias

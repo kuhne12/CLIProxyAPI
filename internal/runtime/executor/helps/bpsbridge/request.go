@@ -30,6 +30,7 @@ type Bridge struct {
 
 	// OnInlineCompaction observes checkpoints in validated terminal output.
 	OnInlineCompaction func(id, encrypted string)
+	OnProtocolError    func(ProtocolDiagnostic)
 }
 
 func decode(raw []byte, target any) error {

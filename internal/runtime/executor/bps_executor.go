@@ -256,7 +256,7 @@ func (e *BPSExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexe
 	session, _ := opts.Metadata[coreexecutor.CanonicalSessionIDMetadataKey].(string)
 	scopeHash := sha256.Sum256([]byte(auth.ID + "\x00" + caller + "\x00" + session))
 	scope := hex.EncodeToString(scopeHash[:])
-	rememberCompaction, errHistory := helps.PrepareBPSHistory(doc, scope, &options)
+	rememberCompaction, errHistory := helps.PrepareBPSHistory(doc, scope, &options, observation)
 	if errHistory != nil {
 		return nil, nil, fmt.Errorf("prepare BPS compacted history: %w", errHistory)
 	}
@@ -277,6 +277,9 @@ func (e *BPSExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexe
 	finalize := helps.NewPayloadFinalizer(e.cfg, e.Identifier(), baseModel, sdktranslator.FormatCodex.String(), "", original, req, opts, auth)
 	finalize.FinalizeDoc(final)
 	payload := final.Bytes()
+	inputUnchanged := ojson.GetBytesNoCopy(upstream, "input").Raw == ojson.GetBytesNoCopy(payload, "input").Raw
+	observation.SetRequestDiagnostic(scope, bridge.CatalogDiagnostic(), inputUnchanged)
+	bridge.OnProtocolError = func(d bpsbridge.ProtocolDiagnostic) { observation.ProtocolFailure(ctx, d) }
 	reporter.SetUpstreamModel(final.Get("model").String())
 	reporter.SetTranslatedReasoningEffort(payload, sdktranslator.FormatOpenAI.String())
 	if opts.ProxyURL != "" {
@@ -297,8 +300,10 @@ func (e *BPSExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexe
 	// A checkpoint can only cover the input actually sent after payload rules.
 	if rememberCompaction != nil {
 		bridge.OnInlineCompaction = func(id, state string) {
-			if ojson.GetBytesNoCopy(upstream, "input").Raw == ojson.GetBytesNoCopy(payload, "input").Raw {
+			if inputUnchanged {
 				rememberCompaction(id, state)
+			} else {
+				observation.SkipCompactionConfirmation()
 			}
 		}
 	}

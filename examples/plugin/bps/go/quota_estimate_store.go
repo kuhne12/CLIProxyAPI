@@ -7,29 +7,40 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/MoeForge/moego/json"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 	log "github.com/sirupsen/logrus"
 )
 
-// Only completed estimates are persisted. Tokens, account IDs, request content,
-// and partial traffic counters never enter this file.
+// Persist bounded accounting state and normalized quota snapshots. Credentials,
+// request content and unhashed identifiers never enter this file.
 type quotaCalibration struct {
-	Reset        time.Time `json:"reset"`
-	Started      time.Time `json:"started"`
-	LastUsed     float64   `json:"last_used"`
-	TotalUSD     float64   `json:"total_usd"`
-	SampleCost   float64   `json:"sample_cost"`
-	SamplePoints float64   `json:"sample_points"`
+	BaselineStarted time.Time `json:"baseline_started,omitempty"`
+	Reset           time.Time `json:"reset"`
+	Started         time.Time `json:"started"`
+	LastUsed        float64   `json:"last_used"`
+	TotalUSD        float64   `json:"total_usd"`
+	SampleCost      float64   `json:"sample_cost"`
+	SamplePoints    float64   `json:"sample_points"`
 }
 
 type quotaCalibrationAccount struct {
-	Key     string                      `json:"key"`
-	Plan    string                      `json:"plan"`
-	Touched time.Time                   `json:"touched"`
-	Windows map[string]quotaCalibration `json:"windows"`
+	Cost       float64                       `json:"cost,omitempty"`
+	Unknown    uint64                        `json:"unknown,omitempty"`
+	Seen       []string                      `json:"seen,omitempty"`
+	Snapshot   *pluginapi.QuotaFetchResponse `json:"snapshot,omitempty"`
+	ObservedAt time.Time                     `json:"observed_at,omitempty"`
+	Key        string                        `json:"key"`
+	Plan       string                        `json:"plan"`
+	Touched    time.Time                     `json:"touched"`
+	Windows    map[string]quotaCalibration   `json:"windows"`
 }
+
+// The bound covers 256 accounts with at most 4096 hashed request IDs each.
+const quotaEstimateStateLimit = 80 << 20
 
 type quotaCalibrationFile struct {
 	Version    int                       `json:"version"`
@@ -68,9 +79,9 @@ func (e *bpsQuotaEstimator) loadCalibrationsLocked() {
 			log.Warn("BPS quota state close failed")
 		}
 	}()
-	raw, errRead := io.ReadAll(io.LimitReader(f, (1<<20)+1))
+	raw, errRead := io.ReadAll(io.LimitReader(f, quotaEstimateStateLimit+1))
 	var state quotaCalibrationFile
-	if errRead != nil || len(raw) > 1<<20 || json.Unmarshal(raw, &state) != nil || state.Version != 1 || len(state.Accounts) > quotaEstimateMaxAccounts {
+	if errRead != nil || len(raw) > quotaEstimateStateLimit || json.Unmarshal(raw, &state) != nil || (state.Version != 1 && state.Version != 2) || len(state.Accounts) > quotaEstimateMaxAccounts {
 		log.Warn("BPS quota estimate state is invalid; new samples are required")
 		return
 	}
@@ -79,18 +90,35 @@ func (e *bpsQuotaEstimator) loadCalibrationsLocked() {
 	}
 	for _, saved := range state.Accounts {
 		keyBytes, errKey := hex.DecodeString(saved.Key)
-		if errKey != nil || len(keyBytes) != 32 || len(saved.Windows) > 4 {
+		if errKey != nil || len(keyBytes) != 32 || len(saved.Windows) > 4 || len(saved.Seen) > quotaEstimateMaxRequests || !finiteQuotaValue(saved.Cost) {
 			continue
 		}
 		key := [32]byte(keyBytes)
-		a := &quotaEstimateAccount{Plan: saved.Plan, Touched: saved.Touched, Windows: make(map[string]*quotaEstimateWindow), Seen: make(map[[32]byte]bool)}
+		a := &quotaEstimateAccount{Cost: saved.Cost, Unknown: saved.Unknown, Snapshot: saved.Snapshot, ObservedAt: saved.ObservedAt, RefreshFailed: true, Plan: saved.Plan, Touched: saved.Touched, Windows: make(map[string]*quotaEstimateWindow), Seen: make(map[[32]byte]bool)}
+		for _, encoded := range saved.Seen {
+			id, errID := hex.DecodeString(encoded)
+			if errID == nil && len(id) == 32 && !a.Seen[[32]byte(id)] {
+				a.Seen[[32]byte(id)] = true
+				a.Order = append(a.Order, [32]byte(id))
+			}
+		}
 		for name, w := range saved.Windows {
-			if len(name) > 100 || w.Reset.IsZero() || w.Started.IsZero() || !w.Started.Before(w.Reset) || !finiteQuotaValue(w.TotalUSD) || w.TotalUSD <= 0 || !finiteQuotaValue(w.SampleCost) || w.SampleCost <= 0 || !finiteQuotaValue(w.SamplePoints) || w.SamplePoints < quotaEstimateMinPoints || w.SamplePoints > 100 || !finiteQuotaValue(w.LastUsed) || w.LastUsed > 100 {
+			if w.BaselineStarted.IsZero() {
+				w.BaselineStarted = w.Started
+			}
+			if len(name) > 100 || w.Reset.IsZero() || w.BaselineStarted.IsZero() || !w.BaselineStarted.Before(w.Reset) || !finiteQuotaValue(w.TotalUSD) || !finiteQuotaValue(w.SampleCost) || !finiteQuotaValue(w.SamplePoints) || w.SamplePoints > 100+1e-8 || !finiteQuotaValue(w.LastUsed) || w.LastUsed > 100 {
 				continue
 			}
-			a.Windows[name] = &quotaEstimateWindow{Reset: w.Reset, SampleStarted: w.Started, LastUsed: w.LastUsed, TotalUSD: w.TotalUSD, SampleCost: w.SampleCost, SamplePoints: w.SamplePoints, Restored: true}
+			if w.TotalUSD > 0 && (w.SampleCost <= 0 || w.SamplePoints+1e-8 < quotaEstimateMinPoints) {
+				continue
+			}
+			// Version 1 keys included an unstable bucket position.
+			if _, window, found := strings.Cut(name, ":"); found {
+				name = window
+			}
+			a.Windows[name] = &quotaEstimateWindow{Reset: w.Reset, Started: w.BaselineStarted, SampleStarted: w.Started, LastUsed: w.LastUsed, TotalUSD: w.TotalUSD, SampleCost: w.SampleCost, SamplePoints: w.SamplePoints, Restored: true}
 		}
-		if len(a.Windows) > 0 {
+		if len(a.Windows) > 0 || a.Cost > 0 || a.Unknown > 0 || a.Snapshot != nil {
 			e.accounts[key] = a
 		}
 	}
@@ -100,16 +128,16 @@ func (e *bpsQuotaEstimator) saveCalibrationsLocked() {
 	if e.statePath == "" {
 		return
 	}
-	state := quotaCalibrationFile{Version: 1, ConfigHash: e.priceFingerprint()}
+	state := quotaCalibrationFile{Version: 2, ConfigHash: e.priceFingerprint()}
 	for key, account := range e.accounts {
-		saved := quotaCalibrationAccount{Key: hex.EncodeToString(key[:]), Plan: account.Plan, Touched: account.Touched, Windows: make(map[string]quotaCalibration)}
-		for name, w := range account.Windows {
-			if w.TotalUSD <= 0 {
-				continue
-			}
-			saved.Windows[name] = quotaCalibration{Reset: w.Reset, Started: w.SampleStarted, LastUsed: w.LastUsed, TotalUSD: w.TotalUSD, SampleCost: w.SampleCost, SamplePoints: w.SamplePoints}
+		saved := quotaCalibrationAccount{Cost: account.Cost, Unknown: account.Unknown, Snapshot: account.Snapshot, ObservedAt: account.ObservedAt, Key: hex.EncodeToString(key[:]), Plan: account.Plan, Touched: account.Touched, Windows: make(map[string]quotaCalibration)}
+		for _, id := range account.Order {
+			saved.Seen = append(saved.Seen, hex.EncodeToString(id[:]))
 		}
-		if len(saved.Windows) > 0 {
+		for name, w := range account.Windows {
+			saved.Windows[name] = quotaCalibration{BaselineStarted: w.Started, Reset: w.Reset, Started: w.SampleStarted, LastUsed: w.LastUsed, TotalUSD: w.TotalUSD, SampleCost: w.SampleCost, SamplePoints: w.SamplePoints}
+		}
+		if len(saved.Windows) > 0 || saved.Cost > 0 || saved.Unknown > 0 || saved.Snapshot != nil {
 			state.Accounts = append(state.Accounts, saved)
 		}
 	}

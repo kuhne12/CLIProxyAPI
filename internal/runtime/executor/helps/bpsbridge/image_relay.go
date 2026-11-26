@@ -27,8 +27,8 @@ import (
 )
 
 var (
-	ErrImageRelayFull    = errors.New("basispoints temporary image storage is full; retry after images expire")
-	ErrImageRelayStorage = errors.New("basispoints temporary image storage is unavailable")
+	ErrImageRelayFull    = errors.New("upstream temporary image storage is full; retry after images expire")
+	ErrImageRelayStorage = errors.New("upstream temporary image storage is unavailable")
 )
 
 const (
@@ -76,7 +76,7 @@ type relayImage struct {
 func ValidateImageRelayOrigin(baseURL string) error {
 	parsed, err := url.Parse(baseURL)
 	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.Opaque != "" || parsed.RawQuery != "" || parsed.ForceQuery || strings.Contains(baseURL, "#") || (parsed.Path != "" && parsed.Path != "/") {
-		return fmt.Errorf("BPS image relay requires an HTTPS public origin without credentials, path, query or fragment")
+		return fmt.Errorf("Image relay requires an HTTPS public origin without credentials, path, query or fragment")
 	}
 	return nil
 }
@@ -195,7 +195,7 @@ func (r *ImageRelay) RewriteDoc(doc *ojson.Doc, scope string) error {
 	}
 	var source object
 	if err := decode(doc.Bytes(), &source); err != nil || source == nil {
-		return fmt.Errorf("invalid Basispoints request JSON")
+		return fmt.Errorf("invalid upstream request JSON")
 	}
 	if err := normalizeContent(source); err != nil {
 		return err
@@ -236,7 +236,7 @@ func (r *ImageRelay) RewriteDoc(doc *ojson.Doc, scope string) error {
 					continue
 				}
 				if len(staged) >= imageRelayMaxRequestImages {
-					return fmt.Errorf("basispoints accepts at most %d inline images per request", imageRelayMaxRequestImages)
+					return fmt.Errorf("upstream accepts at most %d inline images per request", imageRelayMaxRequestImages)
 				}
 				img, token, err := r.storeImage(rawURL, scope)
 				if err != nil {
@@ -245,7 +245,7 @@ func (r *ImageRelay) RewriteDoc(doc *ojson.Doc, scope string) error {
 				staged = append(staged, img)
 				totalBytes += img.size
 				if totalBytes > imageRelayMaxRequestBytes {
-					return fmt.Errorf("basispoints inline images exceed the 32 MiB request limit")
+					return fmt.Errorf("upstream inline images exceed the 32 MiB request limit")
 				}
 				url := baseURL + ImageRelayPath + token
 				if err := doc.Set(fmt.Sprintf("input.%d.%s.%d.image_url", itemIndex, field, partIndex), url); err != nil {
@@ -287,22 +287,22 @@ func (r *ImageRelay) RewriteDoc(doc *ojson.Doc, scope string) error {
 func relayImagePayload(raw string) (string, string, error) {
 	header, payload, ok := strings.Cut(raw[len("data:"):], ",")
 	if !ok || !strings.HasSuffix(strings.ToLower(header), ";base64") {
-		return "", "", fmt.Errorf("basispoints inline image requires a base64 image data URL")
+		return "", "", fmt.Errorf("upstream inline image requires a base64 image data URL")
 	}
 	declared, params, err := mime.ParseMediaType(header[:len(header)-len(";base64")])
 	if err != nil || len(params) != 0 {
-		return "", "", fmt.Errorf("basispoints inline image has an invalid media type")
+		return "", "", fmt.Errorf("upstream inline image has an invalid media type")
 	}
 	switch declared {
 	case "image/png", "image/jpeg", "image/gif", "image/webp":
 	default:
-		return "", "", fmt.Errorf("basispoints inline images must be PNG, JPEG, GIF or WebP")
+		return "", "", fmt.Errorf("upstream inline images must be PNG, JPEG, GIF or WebP")
 	}
 	if len(payload) > base64.StdEncoding.EncodedLen(imageRelayMaxImageBytes) {
-		return "", "", fmt.Errorf("basispoints inline image exceeds the 20 MiB limit")
+		return "", "", fmt.Errorf("upstream inline image exceeds the 20 MiB limit")
 	}
 	if payload == "" {
-		return "", "", fmt.Errorf("basispoints inline image contains invalid base64 data")
+		return "", "", fmt.Errorf("upstream inline image contains invalid base64 data")
 	}
 	return declared, payload, nil
 }
@@ -349,25 +349,25 @@ func (r *ImageRelay) storeImage(raw, scope string) (*relayImage, string, error) 
 	if err != nil {
 		var corrupt base64.CorruptInputError
 		if errors.As(err, &corrupt) || errors.Is(err, io.ErrUnexpectedEOF) {
-			return nil, "", fmt.Errorf("basispoints inline image contains invalid base64 data")
+			return nil, "", fmt.Errorf("upstream inline image contains invalid base64 data")
 		}
 		return nil, "", ErrImageRelayStorage
 	}
 	if n == 0 {
-		return nil, "", fmt.Errorf("basispoints inline image contains invalid base64 data")
+		return nil, "", fmt.Errorf("upstream inline image contains invalid base64 data")
 	}
 	if n > imageRelayMaxImageBytes {
-		return nil, "", fmt.Errorf("basispoints inline image exceeds the 20 MiB limit")
+		return nil, "", fmt.Errorf("upstream inline image exceeds the 20 MiB limit")
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return nil, "", ErrImageRelayStorage
 	}
 	dimensions, format, err := image.DecodeConfig(file)
 	if err != nil || dimensions.Width <= 0 || dimensions.Height <= 0 || int64(dimensions.Width)*int64(dimensions.Height) > imageRelayMaxPixels {
-		return nil, "", fmt.Errorf("basispoints inline image is invalid or exceeds 64 megapixels")
+		return nil, "", fmt.Errorf("upstream inline image is invalid or exceeds 64 megapixels")
 	}
 	if "image/"+format != declared {
-		return nil, "", fmt.Errorf("basispoints inline image media type does not match its contents")
+		return nil, "", fmt.Errorf("upstream inline image media type does not match its contents")
 	}
 	if err := file.Close(); err != nil {
 		return nil, "", ErrImageRelayStorage

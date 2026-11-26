@@ -1,3 +1,137 @@
+diff --git a/src/features/authFiles/AuthFilesPage.tsx b/src/features/authFiles/AuthFilesPage.tsx
+index 8e2db4b..7c02e02 100644
+--- a/src/features/authFiles/AuthFilesPage.tsx
++++ b/src/features/authFiles/AuthFilesPage.tsx
+@@ -1,3 +1,4 @@
++import { useBpsQuotaAutoRefresh } from '@/features/quota/providers/plugin/useBpsQuotaAutoRefresh';
+ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+ import { useTranslation } from 'react-i18next';
+ import { useNavigate } from 'react-router-dom';
+@@ -460,6 +461,7 @@ export function AuthFilesPage() {
+   const currentPage = Math.min(page, totalPages);
+   const start = (currentPage - 1) * pageSize;
+   const pageItems = useMemo(() => sorted.slice(start, start + pageSize), [pageSize, sorted, start]);
++  useBpsQuotaAutoRefresh(pageItems, disableControls || loading);
+   const selectablePageItems = useMemo(
+     () => pageItems.filter((file) => !isRuntimeOnlyAuthFile(file)),
+     [pageItems]
+diff --git a/src/features/authFiles/components/AuthFileQuotaSection.tsx b/src/features/authFiles/components/AuthFileQuotaSection.tsx
+index 9b6daa3..4d0e196 100644
+--- a/src/features/authFiles/components/AuthFileQuotaSection.tsx
++++ b/src/features/authFiles/components/AuthFileQuotaSection.tsx
+@@ -57,8 +57,15 @@ export function AuthFileQuotaSection(props: AuthFileQuotaSectionProps) {
+     if (quotaType === 'xai') return state.xaiQuota[cacheKey] as QuotaCardState | undefined;
+     return assertNever(quotaType);
+   });
+-  const retainedClaudeUsage =
+-    quotaType === 'claude' && hasClaudeUsageData(quota as ClaudeQuotaState | undefined);
++  const retainedQuotaUsage =
++    (quotaType === 'claude' && hasClaudeUsageData(quota as ClaudeQuotaState | undefined)) ||
++    (adapter.type === 'plugin' &&
++      quota &&
++      'pluginId' in quota &&
++      quota.pluginId === 'bps' &&
++      'groups' in quota &&
++      Array.isArray(quota.groups) &&
++      quota.groups.length > 0);
+ 
+   const updateQuotaState = useQuotaStore(
+     (state) => state[adapter.storeSetter] as unknown as QuotaMapUpdater
+@@ -204,12 +211,12 @@ export function AuthFileQuotaSection(props: AuthFileQuotaSectionProps) {
+         <div className={styles.quotaError}>
+           <QuotaErrorMessage quota={quota} i18nPrefix={adapter.i18nPrefix} />
+         </div>
+-      ) : quota && !retainedClaudeUsage ? (
++      ) : quota && !retainedQuotaUsage ? (
+         <adapter.Body quota={quota} classes={compactQuotaClasses} />
+-      ) : !retainedClaudeUsage ? (
++      ) : !retainedQuotaUsage ? (
+         <div className={styles.quotaMessage}>{t(`${adapter.i18nPrefix}.idle`)}</div>
+       ) : null}
+-      {retainedClaudeUsage && quota && <adapter.Body quota={quota} classes={compactQuotaClasses} />}
++      {retainedQuotaUsage && quota && <adapter.Body quota={quota} classes={compactQuotaClasses} />}
+       {(showRefreshQuotaAction || resetQuotaAction) && (
+         <div className={styles.quotaCardActions}>
+           {resetQuotaAction}
+diff --git a/src/features/quota/QuotaPage.tsx b/src/features/quota/QuotaPage.tsx
+index a459e9a..353df1a 100644
+--- a/src/features/quota/QuotaPage.tsx
++++ b/src/features/quota/QuotaPage.tsx
+@@ -1,3 +1,4 @@
++import { useBpsQuotaAutoRefresh } from '@/features/quota/providers/plugin/useBpsQuotaAutoRefresh';
+ /**
+  * 额度查询页：提供商 tabs + 统一卡网格。
+  *
+@@ -288,6 +289,11 @@ export function QuotaPage() {
+   /* ---------- 加载与操作 ---------- */
+ 
+   const { batchLoading, loadQuota } = useQuotaBatchLoader();
++  const bpsQuotaFiles = useMemo(() => pageItems.map((entry) => entry.file), [pageItems]);
++  useBpsQuotaAutoRefresh(
++    bpsQuotaFiles,
++    disableControls || loading || filesGeneration !== sessionGeneration
++  );
+   const { resettingQuotaName, refreshQuota, resetQuota } = useQuotaActions(disableControls);
+ 
+   const pendingRefreshRef = useRef<number | null>(null);
+diff --git a/src/features/quota/components/QuotaCard.tsx b/src/features/quota/components/QuotaCard.tsx
+index 8da5941..6ee0c0b 100644
+--- a/src/features/quota/components/QuotaCard.tsx
++++ b/src/features/quota/components/QuotaCard.tsx
+@@ -69,8 +69,15 @@ export function QuotaCard(props: QuotaCardProps) {
+   const { t } = useTranslation();
+   const adapter = QUOTA_ADAPTERS[entry.type];
+   const file = entry.file;
+-  const retainedClaudeUsage =
+-    entry.type === 'claude' && hasClaudeUsageData(quota as ClaudeQuotaState | undefined);
++  const retainedQuotaUsage =
++    (entry.type === 'claude' && hasClaudeUsageData(quota as ClaudeQuotaState | undefined)) ||
++    (adapter.type === 'plugin' &&
++      quota &&
++      'pluginId' in quota &&
++      quota.pluginId === 'bps' &&
++      'groups' in quota &&
++      Array.isArray(quota.groups) &&
++      quota.groups.length > 0);
+   const displayName = getQuotaDisplayName(file);
+ 
+   // Capture the entrance delay only at mount, without a render-time ref read.
+@@ -185,7 +192,7 @@ export function QuotaCard(props: QuotaCardProps) {
+             <IconRefreshCw size={15} aria-hidden="true" className={styles.idleGlyph} />
+             <span className={styles.idleHint}>{t(`${adapter.i18nPrefix}.idle`)}</span>
+           </button>
+-        ) : loading && !retainedClaudeUsage ? (
++        ) : loading && !retainedQuotaUsage ? (
+           <div className={styles.skeleton} aria-busy="true">
+             <span className={styles.srOnly}>{t(`${adapter.i18nPrefix}.loading`)}</span>
+             {[0, 1].map((row) => (
+@@ -199,22 +206,22 @@ export function QuotaCard(props: QuotaCardProps) {
+           <div className={styles.errorStrip} role="alert">
+             <QuotaErrorMessage quota={quota} i18nPrefix={adapter.i18nPrefix} />
+           </div>
+-        ) : quota && !retainedClaudeUsage ? (
++        ) : quota && !retainedQuotaUsage ? (
+           <adapter.Body
+             quota={quota}
+             classes={quotaClasses}
+             planItems={claudePlanItems}
+             afterPlan={entry.type === 'codex' ? codexAfterPlan : claudeAfterPlan}
+           />
+-        ) : !retainedClaudeUsage ? (
++        ) : !retainedQuotaUsage ? (
+           <div className={styles.idleHint}>{t(`${adapter.i18nPrefix}.idle`)}</div>
+         ) : null}
+-        {loading && retainedClaudeUsage && (
++        {loading && retainedQuotaUsage && (
+           <div role="status" aria-busy="true" className={quotaClasses.quotaMessage}>
+             {t(`${adapter.i18nPrefix}.loading`)}
+           </div>
+         )}
+-        {retainedClaudeUsage && quota && (
++        {retainedQuotaUsage && quota && (
+           <adapter.Body
+             quota={quota}
+             classes={quotaClasses}
 diff --git a/src/features/quota/providers/plugin/BpsQuotaBody.module.scss b/src/features/quota/providers/plugin/BpsQuotaBody.module.scss
 new file mode 100644
 index 0000000..d291864
@@ -125,10 +259,10 @@ index 0000000..d291864
 +}
 diff --git a/src/features/quota/providers/plugin/BpsQuotaBody.tsx b/src/features/quota/providers/plugin/BpsQuotaBody.tsx
 new file mode 100644
-index 0000000..0ea3656
+index 0000000..93eaf4b
 --- /dev/null
 +++ b/src/features/quota/providers/plugin/BpsQuotaBody.tsx
-@@ -0,0 +1,171 @@
+@@ -0,0 +1,183 @@
 +import { useTranslation } from 'react-i18next';
 +import { InfoTip } from '@/components/ui/Tooltip';
 +import { useNow } from '@/hooks/useNow';
@@ -141,7 +275,11 @@ index 0000000..0ea3656
 +export function BpsQuotaBody({ quota, classes }: QuotaBodyProps<PluginQuotaState>) {
 +  const { t, i18n } = useTranslation();
 +  const hasReset = quota.groups.some((group) => group.buckets.some((bucket) => bucket.resetTime));
-+  const now = useNow(hasReset) + (quota.serverTimeOffsetMs ?? 0);
++  const now = useNow(hasReset || Boolean(quota.observedAt)) + (quota.serverTimeOffsetMs ?? 0);
++  const observed = Date.parse(quota.observedAt ?? '');
++  const stale =
++    quota.stale ||
++    (Number.isFinite(observed) && now - (quota.serverTimeOffsetMs ?? 0) - observed > 120_000);
 +  const plan =
 +    quota.subscription?.tierName || quota.subscription?.plan || quota.subscription?.tierId;
 +  const resetCredits = quota.summary.find(
@@ -173,6 +311,14 @@ index 0000000..0ea3656
 +
 +  return (
 +    <div className={styles.body} data-bps-quota-layout="compact-v1">
++      <div className={classes.quotaMessage} role="status">
++        {Number.isFinite(observed)
++          ? t('plugin_quota.bps_updated_at', {
++              time: new Date(observed).toLocaleString(i18n.resolvedLanguage),
++            })
++          : t('plugin_quota.bps_auto_refresh')}
++        {stale && <span> · {t('plugin_quota.bps_stale_snapshot')}</span>}
++      </div>
 +      {
 +        <div className={classes.codexPlan}>
 +          {plan && (
@@ -373,7 +519,7 @@ index 0000000..fe61d0f
 +  return /^bps_estimated_[0-9]+_(remaining|total)_usd$/.test(metric.key);
 +}
 diff --git a/src/features/quota/providers/plugin/data.ts b/src/features/quota/providers/plugin/data.ts
-index 6e8c7ef..037e9d7 100644
+index 6e8c7ef..5b856fa 100644
 --- a/src/features/quota/providers/plugin/data.ts
 +++ b/src/features/quota/providers/plugin/data.ts
 @@ -8,6 +8,7 @@ import type {
@@ -384,32 +530,38 @@ index 6e8c7ef..037e9d7 100644
  import { pluginsApi } from '@/services/api/plugins';
  import { normalizeAuthIndex } from '@/utils/authIndex';
  import {
-@@ -17,13 +18,18 @@ import {
+@@ -17,13 +18,22 @@ import {
    selectedQuotaPluginId,
  } from '@/utils/quota';
  import type { QuotaProviderData } from '../types';
 +import { buildBpsQuotaEstimates } from './bpsQuota';
  
  type PluginQuotaPayload = AntigravityQuotaSummaryPayload & {
++  observedAt?: string;
++  stale?: boolean;
 +  serverTimeOffsetMs?: number;
    subscription?: Partial<AntigravityQuotaSubscription> | null;
    summary?: Array<Partial<PluginQuotaMetric>>;
  };
  
  type PluginQuotaData = {
++  observedAt?: string;
++  stale?: boolean;
 +  pluginId: string;
 +  bpsEstimates?: PluginQuotaState['bpsEstimates'];
 +  serverTimeOffsetMs?: number;
    groups: PluginQuotaState['groups'];
    subscription: AntigravityQuotaSubscription | null;
    summary: PluginQuotaMetric[];
-@@ -141,18 +147,57 @@ export const fetchPluginQuota = async (
+@@ -141,18 +151,61 @@ export const fetchPluginQuota = async (
      `/plugins/${encodeURIComponent(pluginId)}/quota`,
      { auth_index: authIndex }
    );
 +  const summary = normalizePluginQuotaSummary(payload.summary);
    return {
 +    pluginId,
++    observedAt: typeof payload.observedAt === 'string' ? payload.observedAt : undefined,
++    stale: payload.stale === true,
      groups: buildAntigravityQuotaGroups(payload),
      subscription: normalizeSubscription(payload.subscription),
 -    summary: normalizePluginQuotaSummary(payload.summary),
@@ -453,6 +605,8 @@ index 6e8c7ef..037e9d7 100644
 +  resetQuota: resetBpsQuota,
 +  canResetQuota: (quota) =>
 +    quota.pluginId === 'bps' &&
++    quota.status === 'success' &&
++    !quota.stale &&
 +    quota.summary.some(
 +      (metric) =>
 +        metric.key === 'rate_limit_reset_credits_available_count' &&
@@ -462,16 +616,134 @@ index 6e8c7ef..037e9d7 100644
    storeSelector: (state) => state.pluginQuota,
    storeSetter: 'setPluginQuota',
    buildLoadingState: () => ({ status: 'loading', groups: [], subscription: null, summary: [] }),
+diff --git a/src/features/quota/providers/plugin/useBpsQuotaAutoRefresh.ts b/src/features/quota/providers/plugin/useBpsQuotaAutoRefresh.ts
+new file mode 100644
+index 0000000..8cb3c5f
+--- /dev/null
++++ b/src/features/quota/providers/plugin/useBpsQuotaAutoRefresh.ts
+@@ -0,0 +1,109 @@
++import { useEffect } from 'react';
++import { useTranslation } from 'react-i18next';
++import type { TFunction } from 'i18next';
++import type { AuthFileItem } from '@/types';
++import { apiClient } from '@/services/api/client';
++import {
++  captureQuotaCacheGeneration,
++  commitIfQuotaCacheCurrent,
++  useQuotaStore,
++} from '@/stores/useQuotaStore';
++import { getQuotaCacheKey } from '@/utils/quota/identity';
++import { selectedQuotaPluginId, getStatusFromError } from '@/utils/quota';
++import { isRuntimeOnlyAuthFile } from '@/features/authFiles/constants';
++import { fetchPluginQuota, PLUGIN_CONFIG } from './data';
++
++const attempts = new Map<string, { at: number; promise: Promise<void> }>();
++let sessionKey = '';
++const refreshInterval = 60_000;
++
++export function refreshBpsQuotaAutomatically(
++  file: AuthFileItem,
++  t: TFunction,
++  now = Date.now()
++): Promise<void> {
++  if (file.disabled || isRuntimeOnlyAuthFile(file) || selectedQuotaPluginId(file) !== 'bps')
++    return Promise.resolve();
++  const store = useQuotaStore.getState();
++  const session = JSON.stringify([apiClient.getConnectionRevision(), store.cacheGeneration]);
++  if (session !== sessionKey) {
++    attempts.clear();
++    sessionKey = session;
++  }
++  const cacheKey = getQuotaCacheKey(file);
++  const key = JSON.stringify([cacheKey, store.fileGenerations[file.name] ?? 0]);
++  const previous = attempts.get(key);
++  if (previous && now - previous.at < refreshInterval) return previous.promise;
++  if (store.pluginQuota[cacheKey]?.status === 'loading') return Promise.resolve();
++  const generation = captureQuotaCacheGeneration(file.name);
++  store.setPluginQuota((prev) => ({ ...prev, [cacheKey]: PLUGIN_CONFIG.buildLoadingState() }));
++  const promise = (async () => {
++    try {
++      const data = await fetchPluginQuota(file, t);
++      commitIfQuotaCacheCurrent(generation, () => {
++        useQuotaStore
++          .getState()
++          .setPluginQuota((prev) => ({
++            ...prev,
++            [cacheKey]: PLUGIN_CONFIG.buildSuccessState(data),
++          }));
++      });
++    } catch (error) {
++      commitIfQuotaCacheCurrent(generation, () => {
++        useQuotaStore
++          .getState()
++          .setPluginQuota((prev) => ({
++            ...prev,
++            [cacheKey]: PLUGIN_CONFIG.buildErrorState(
++              error instanceof Error ? error.message : t('common.unknown_error'),
++              getStatusFromError(error),
++              error
++            ),
++          }));
++      });
++    }
++  })();
++  attempts.set(key, { at: now, promise });
++  // Avoid retaining visited credentials indefinitely on long-running panels.
++  for (const [candidate, attempt] of attempts) {
++    if (now - attempt.at > 10 * refreshInterval) attempts.delete(candidate);
++  }
++  return promise;
++}
++
++export function useBpsQuotaAutoRefresh(files: AuthFileItem[], disabled: boolean) {
++  const { t } = useTranslation();
++  const generation = useQuotaStore((state) => state.cacheGeneration);
++  const fileGenerations = useQuotaStore((state) => state.fileGenerations);
++  useEffect(() => {
++    if (disabled) return;
++    let cancelled = false;
++    let busy = false;
++    const refresh = async () => {
++      if (cancelled || busy || document.visibilityState === 'hidden') return;
++      busy = true;
++      const pending = files.filter((file) => selectedQuotaPluginId(file) === 'bps');
++      try {
++        await Promise.all(
++          Array.from({ length: Math.min(4, pending.length) }, async () => {
++            while (!cancelled && pending.length > 0) {
++              const file = pending.shift();
++              if (file) await refreshBpsQuotaAutomatically(file, t);
++            }
++          })
++        );
++      } finally {
++        busy = false;
++      }
++    };
++    void refresh();
++    const interval = window.setInterval(() => void refresh(), refreshInterval);
++    const onVisible = () => void refresh();
++    document.addEventListener('visibilitychange', onVisible);
++    return () => {
++      cancelled = true;
++      window.clearInterval(interval);
++      document.removeEventListener('visibilitychange', onVisible);
++    };
++  }, [files, disabled, t, generation, fileGenerations]);
++}
 diff --git a/src/i18n/locales/en.json b/src/i18n/locales/en.json
-index c732027..c6e2395 100644
+index c732027..b573f3f 100644
 --- a/src/i18n/locales/en.json
 +++ b/src/i18n/locales/en.json
-@@ -482,7 +482,24 @@
+@@ -482,7 +482,27 @@
      "plugin_not_found": "No enabled plugin provides quota for {{provider}}",
      "empty_data": "No quota data available",
      "plan_label": "Plan",
 -    "remaining_percent": "{{percent}}% remaining"
 +    "remaining_percent": "{{percent}}% remaining",
++    "bps_updated_at": "Updated {{time}} · Automatic refresh",
++    "bps_auto_refresh": "Quota refreshes automatically",
++    "bps_stale_snapshot": "Showing the last successful snapshot; refresh pending",
 +    "bps_account_usage": "Account usage",
 +    "bps_estimate_label": "About the estimate",
 +    "bps_estimate_help": "Estimated total = priced CPA usage change ÷ quota percentage-point change × 100. Estimated remaining = total × remaining fraction. Estimates update as samples grow; rounded percentages, model mix and usage outside CPA can change the result. This is API value, not an official dollar balance. Windows share usage and must not be added together.",
@@ -493,15 +765,18 @@ index c732027..c6e2395 100644
    "claude_quota": {
      "title": "Claude Quota",
 diff --git a/src/i18n/locales/ko.json b/src/i18n/locales/ko.json
-index 23ce80f..7ca09f6 100644
+index 23ce80f..e61f4e3 100644
 --- a/src/i18n/locales/ko.json
 +++ b/src/i18n/locales/ko.json
-@@ -482,7 +482,24 @@
+@@ -482,7 +482,27 @@
      "plugin_not_found": "{{provider}}의 할당량을 제공하는 활성 플러그인을 찾을 수 없습니다",
      "empty_data": "사용 가능한 할당량 데이터가 없습니다",
      "plan_label": "플랜",
 -    "remaining_percent": "{{percent}}% 남음"
 +    "remaining_percent": "{{percent}}% 남음",
++    "bps_updated_at": "업데이트 {{time}} · 자동 새로고침",
++    "bps_auto_refresh": "할당량 자동 새로고침",
++    "bps_stale_snapshot": "마지막 성공 결과 표시 중 · 업데이트 대기",
 +    "bps_account_usage": "계정 사용량",
 +    "bps_estimate_label": "추정값 안내",
 +    "bps_estimate_help": "총 추정액 = CPA 비용 증가분 ÷ 사용률 증가분 × 100. 남은 추정액 = 총액 × 잔여 비율. 새 표본, 반올림, 모델 구성 및 CPA 외 사용에 따라 달라집니다. 공식 달러 잔액이 아닌 API 가치 추정값이며 기간별 금액을 합산하면 안 됩니다.",
@@ -523,15 +798,18 @@ index 23ce80f..7ca09f6 100644
    "claude_quota": {
      "title": "Claude 할당량",
 diff --git a/src/i18n/locales/ru.json b/src/i18n/locales/ru.json
-index 8fd381c..defdac0 100644
+index 8fd381c..cd3a97b 100644
 --- a/src/i18n/locales/ru.json
 +++ b/src/i18n/locales/ru.json
-@@ -656,7 +656,24 @@
+@@ -656,7 +656,27 @@
      "plugin_not_found": "Не найден активный плагин, предоставляющий квоту для {{provider}}",
      "empty_data": "Нет доступных данных о квоте",
      "plan_label": "План",
 -    "remaining_percent": "Осталось {{percent}}%"
 +    "remaining_percent": "Осталось {{percent}}%",
++    "bps_updated_at": "Обновлено {{time}} · Автообновление",
++    "bps_auto_refresh": "Квота обновляется автоматически",
++    "bps_stale_snapshot": "Последний успешный результат; ожидается обновление",
 +    "bps_account_usage": "Использование аккаунта",
 +    "bps_estimate_label": "Оценка квоты",
 +    "bps_estimate_help": "Общая оценка = изменение стоимости запросов CPA ÷ изменение процента использования × 100. Остаток = общая оценка × оставшаяся доля. Новые данные, округление, выбор модели и использование вне CPA меняют оценку. Это оценка стоимости API, а не официальный баланс. Окна нельзя суммировать.",
@@ -553,15 +831,18 @@ index 8fd381c..defdac0 100644
    "kimi_quota": {
      "plan_label": "Тариф",
 diff --git a/src/i18n/locales/tr.json b/src/i18n/locales/tr.json
-index 273d851..135bf40 100644
+index 273d851..92d9955 100644
 --- a/src/i18n/locales/tr.json
 +++ b/src/i18n/locales/tr.json
-@@ -482,7 +482,24 @@
+@@ -482,7 +482,27 @@
      "plugin_not_found": "{{provider}} için Kota Sağlayan Etkin Eklenti Yok",
      "empty_data": "Kullanılabilir Kota Verisi Yok",
      "plan_label": "Plan",
 -    "remaining_percent": "%{{percent}} Kaldı"
 +    "remaining_percent": "%{{percent}} Kaldı",
++    "bps_updated_at": "Güncelleme {{time}} · Otomatik yenileme",
++    "bps_auto_refresh": "Kota otomatik yenilenir",
++    "bps_stale_snapshot": "Son başarılı sonuç gösteriliyor; güncelleme bekleniyor",
 +    "bps_account_usage": "Hesap kullanımı",
 +    "bps_estimate_label": "Tahmin hakkında",
 +    "bps_estimate_help": "Tahmini toplam = CPA maliyet değişimi ÷ kullanım yüzdesi puanı değişimi × 100. Kalan = toplam × kalan oran. Yeni örnekler, yuvarlama, model seçimi ve CPA dışı kullanım tahmini değiştirebilir. Bu resmi dolar bakiyesi değil, API değeri tahminidir. Dönemler birbirine eklenmez.",
@@ -583,15 +864,18 @@ index 273d851..135bf40 100644
    "claude_quota": {
      "title": "Claude Kotası",
 diff --git a/src/i18n/locales/vi.json b/src/i18n/locales/vi.json
-index ecb555b..750caba 100644
+index ecb555b..2adcff7 100644
 --- a/src/i18n/locales/vi.json
 +++ b/src/i18n/locales/vi.json
-@@ -482,7 +482,24 @@
+@@ -482,7 +482,27 @@
      "plugin_not_found": "Không tìm thấy plugin đang bật cung cấp quota cho {{provider}}",
      "empty_data": "Chưa có dữ liệu quota",
      "plan_label": "Gói",
 -    "remaining_percent": "Còn lại {{percent}}%"
 +    "remaining_percent": "Còn lại {{percent}}%",
++    "bps_updated_at": "Cập nhật {{time}} · Tự động làm mới",
++    "bps_auto_refresh": "Hạn mức tự động làm mới",
++    "bps_stale_snapshot": "Hiển thị kết quả thành công gần nhất; chờ cập nhật",
 +    "bps_account_usage": "Mức sử dụng tài khoản",
 +    "bps_estimate_label": "Về ước tính",
 +    "bps_estimate_help": "Tổng ước tính = thay đổi chi phí CPA ÷ thay đổi điểm phần trăm sử dụng × 100. Còn lại = tổng × tỷ lệ còn lại. Mẫu mới, làm tròn, lựa chọn mô hình và sử dụng ngoài CPA có thể thay đổi ước tính. Đây là giá trị API ước tính, không phải số dư USD chính thức. Không cộng các cửa sổ với nhau.",
@@ -613,15 +897,18 @@ index ecb555b..750caba 100644
    "claude_quota": {
      "title": "Quota Claude",
 diff --git a/src/i18n/locales/zh-CN.json b/src/i18n/locales/zh-CN.json
-index c8f773f..7406699 100644
+index c8f773f..91c788d 100644
 --- a/src/i18n/locales/zh-CN.json
 +++ b/src/i18n/locales/zh-CN.json
-@@ -650,7 +650,24 @@
+@@ -650,7 +650,27 @@
      "plugin_not_found": "未找到为 {{provider}} 提供额度查询的已启用插件",
      "empty_data": "暂无可用额度数据",
      "plan_label": "套餐",
 -    "remaining_percent": "剩余 {{percent}}%"
 +    "remaining_percent": "剩余 {{percent}}%",
++    "bps_updated_at": "更新于 {{time}} · 自动刷新",
++    "bps_auto_refresh": "额度自动刷新",
++    "bps_stale_snapshot": "当前显示上次成功结果，等待更新",
 +    "bps_account_usage": "账户用量",
 +    "bps_estimate_label": "额度估算说明",
 +    "bps_estimate_help": "估算总额 = CPA 观测消费增量 ÷ 额度使用百分比增量 × 100；估算剩余 = 总额 × 剩余比例。新增样本、百分比取整、模型组合和 CPA 之外的使用都会影响估值。这是 API 使用价值估算，不是官方美元余额。各窗口共享用量，不能相加。",
@@ -643,15 +930,18 @@ index c8f773f..7406699 100644
    "kimi_quota": {
      "plan_label": "套餐",
 diff --git a/src/i18n/locales/zh-TW.json b/src/i18n/locales/zh-TW.json
-index ad5ccab..0735b55 100644
+index ad5ccab..ad54da7 100644
 --- a/src/i18n/locales/zh-TW.json
 +++ b/src/i18n/locales/zh-TW.json
-@@ -650,7 +650,24 @@
+@@ -650,7 +650,27 @@
      "plugin_not_found": "找不到為 {{provider}} 提供配額查詢的已啟用插件",
      "empty_data": "暫無可用配額資料",
      "plan_label": "方案",
 -    "remaining_percent": "剩餘 {{percent}}%"
 +    "remaining_percent": "剩餘 {{percent}}%",
++    "bps_updated_at": "更新於 {{time}} · 自動重新整理",
++    "bps_auto_refresh": "額度自動重新整理",
++    "bps_stale_snapshot": "目前顯示上次成功結果，等待更新",
 +    "bps_account_usage": "帳戶用量",
 +    "bps_estimate_label": "額度估算說明",
 +    "bps_estimate_help": "估算總額 = CPA 觀測消費增量 ÷ 額度使用百分比增量 × 100；估算剩餘 = 總額 × 剩餘比例。新增樣本、百分比取整、模型組合及 CPA 之外的使用會影響估值。這是 API 使用價值估算，並非官方美元餘額。各時段共用用量，不能相加。",
@@ -672,14 +962,50 @@ index ad5ccab..0735b55 100644
    },
    "kimi_quota": {
      "plan_label": "方案",
+diff --git a/src/stores/useQuotaStore.ts b/src/stores/useQuotaStore.ts
+index 5a0ff66..844be82 100644
+--- a/src/stores/useQuotaStore.ts
++++ b/src/stores/useQuotaStore.ts
+@@ -151,9 +151,26 @@ export const useQuotaStore = create<QuotaStoreState>((set) => ({
+   setMetaQuota: (updater) =>
+     set((state) => ({ metaQuota: resolveUpdater(updater, state.metaQuota) })),
+   setPluginQuota: (updater) =>
+-    set((state) => ({
+-      pluginQuota: resolveUpdater(updater, state.pluginQuota),
+-    })),
++    set((state) => {
++      const next = { ...resolveUpdater(updater, state.pluginQuota) };
++      for (const [key, quota] of Object.entries(next)) {
++        const previous = state.pluginQuota[key];
++        if (
++          previous?.pluginId === 'bps' &&
++          previous.groups.length > 0 &&
++          (quota.status === 'loading' || quota.status === 'error')
++        ) {
++          next[key] = {
++            ...previous,
++            status: quota.status,
++            error: quota.error,
++            errorStatus: quota.errorStatus,
++            stale: quota.status === 'error' || previous.stale,
++          };
++        }
++      }
++      return { pluginQuota: next };
++    }),
+   setXaiQuota: (updater) =>
+     set((state) => ({
+       xaiQuota: resolveUpdater(updater, state.xaiQuota),
 diff --git a/src/types/quota.ts b/src/types/quota.ts
-index 7df6696..d14ebcd 100644
+index 7df6696..0265203 100644
 --- a/src/types/quota.ts
 +++ b/src/types/quota.ts
-@@ -280,6 +280,8 @@ export interface PluginQuotaMetric {
+@@ -280,6 +280,10 @@ export interface PluginQuotaMetric {
  }
  
  export interface PluginQuotaState extends AntigravityQuotaState {
++  observedAt?: string;
++  stale?: boolean;
 +  pluginId?: string;
 +  bpsEstimates?: Record<string, { total: number; remaining: number }>;
    summary: PluginQuotaMetric[];
@@ -822,6 +1148,98 @@ index 0000000..a305f6f
 +    const markup = render(quota);
 +    expect(markup).toContain('40 ' + chinese.t('plugin_quota.bps_credit_unit'));
 +    expect(markup).not.toContain('$40.00');
++  });
++});
+diff --git a/tests/bpsQuotaAutoRefresh.test.ts b/tests/bpsQuotaAutoRefresh.test.ts
+new file mode 100644
+index 0000000..584c65f
+--- /dev/null
++++ b/tests/bpsQuotaAutoRefresh.test.ts
+@@ -0,0 +1,86 @@
++import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
++import i18n from '@/i18n';
++import { apiClient } from '@/services/api/client';
++import { useQuotaStore } from '@/stores/useQuotaStore';
++import { getQuotaCacheKey } from '@/utils/quota/identity';
++import { refreshBpsQuotaAutomatically } from '@/features/quota/providers/plugin/useBpsQuotaAutoRefresh';
++import { PLUGIN_CONFIG } from '@/features/quota/providers/plugin/data';
++
++const file = {
++  name: 'fixture.json',
++  authIndex: 'fixture-index',
++  type: 'bps',
++  quotaPluginId: 'bps',
++  supportsQuota: true,
++};
++const payload = {
++  observedAt: '2026-11-26T00:00:00Z',
++  stale: false,
++  groups: [{ displayName: 'Account usage', buckets: [{ window: '7d', remainingFraction: 0.52 }] }],
++  summary: [{ key: 'rate_limit_reset_credits_available_count', label: 'credits', value: 1 }],
++};
++const mocks: Array<{ mockRestore(): void }> = [];
++beforeEach(() => useQuotaStore.getState().clearQuotaCache());
++afterEach(() => {
++  for (const mock of mocks.splice(0)) mock.mockRestore();
++  useQuotaStore.getState().clearQuotaCache();
++});
++
++describe('BPS automatic quota refresh', () => {
++  test('loads without clicking, shares concurrent requests and throttles reads', async () => {
++    const post = spyOn(apiClient, 'post').mockResolvedValue(payload);
++    mocks.push(post);
++    await Promise.all(
++      Array.from({ length: 10 }, () => refreshBpsQuotaAutomatically(file, i18n.t, 1000))
++    );
++    await refreshBpsQuotaAutomatically(file, i18n.t, 2000);
++    expect(post).toHaveBeenCalledTimes(1);
++    const quota = useQuotaStore.getState().pluginQuota[getQuotaCacheKey(file)];
++    expect(quota.status).toBe('success');
++    expect(quota.observedAt).toBe(payload.observedAt);
++    expect(quota.groups.length).toBe(1);
++    await refreshBpsQuotaAutomatically(file, i18n.t, 61000);
++    expect(post).toHaveBeenCalledTimes(2);
++  });
++  test('retains the snapshot during refresh and on failure, but disables stale resets', async () => {
++    const post = spyOn(apiClient, 'post').mockResolvedValue(payload);
++    mocks.push(post);
++    await refreshBpsQuotaAutomatically(file, i18n.t, 1000);
++    const key = getQuotaCacheKey(file);
++    const before = useQuotaStore.getState().pluginQuota[key];
++    useQuotaStore
++      .getState()
++      .setPluginQuota((prev) => ({ ...prev, [key]: PLUGIN_CONFIG.buildLoadingState() }));
++    expect(useQuotaStore.getState().pluginQuota[key].groups).toEqual(before.groups);
++    useQuotaStore.getState().setPluginQuota((prev) => ({ ...prev, [key]: before }));
++    post.mockRejectedValue(new Error('offline'));
++    await refreshBpsQuotaAutomatically(file, i18n.t, 61000);
++    const after = useQuotaStore.getState().pluginQuota[key];
++    expect(after.groups).toEqual(before.groups);
++    expect(after.observedAt).toBe(before.observedAt);
++    expect(after.stale).toBe(true);
++    expect(PLUGIN_CONFIG.canResetQuota!(after)).toBe(false);
++  });
++  test('does not restore a response after logout or credential invalidation', async () => {
++    let resolve!: (value: typeof payload) => void;
++    const post = spyOn(apiClient, 'post').mockImplementation(
++      () =>
++        new Promise((done) => {
++          resolve = done;
++        })
++    );
++    mocks.push(post);
++    const pending = refreshBpsQuotaAutomatically(file, i18n.t, 1000);
++    useQuotaStore.getState().clearQuotaCache();
++    resolve(payload);
++    await pending;
++    expect(useQuotaStore.getState().pluginQuota).toEqual({});
++  });
++  test('does not poll disabled or unrelated credentials', async () => {
++    const post = spyOn(apiClient, 'post').mockResolvedValue(payload);
++    mocks.push(post);
++    await refreshBpsQuotaAutomatically({ ...file, disabled: true }, i18n.t, 1000);
++    await refreshBpsQuotaAutomatically({ ...file, quotaPluginId: 'other' }, i18n.t, 1000);
++    expect(post).not.toHaveBeenCalled();
 +  });
 +});
 diff --git a/tests/bpsQuotaReset.test.ts b/tests/bpsQuotaReset.test.ts

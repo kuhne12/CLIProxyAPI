@@ -38,7 +38,7 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 	}
 	t.Chdir(dir)
 	host := New()
-	client, errOpen := (dynamicLibraryLoader{}).Open(pluginFile{ID: "bps", Path: pluginPath, Version: "0.5.7"}, host)
+	client, errOpen := (dynamicLibraryLoader{}).Open(pluginFile{ID: "bps", Path: pluginPath, Version: "0.5.8"}, host)
 	if errOpen != nil {
 		t.Fatal(errOpen)
 	}
@@ -48,7 +48,7 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 		t.Fatal(errRegister)
 	}
 	fields := plugin.Metadata.ConfigFields
-	if plugin.Metadata.Version != "0.5.7" || len(fields) != 3 || fields[0].Name != "cache-creation-as-input" || fields[0].Type != pluginapi.ConfigFieldTypeBoolean || fields[0].Default != false || fields[1].Name != "quota-model-prices" || fields[1].Type != pluginapi.ConfigFieldTypeObject || fields[2].Name != "image-relay-origin" || fields[2].Type != pluginapi.ConfigFieldTypeString {
+	if plugin.Metadata.Version != "0.5.8" || len(fields) != 3 || fields[0].Name != "cache-creation-as-input" || fields[0].Type != pluginapi.ConfigFieldTypeBoolean || fields[0].Default != false || fields[1].Name != "quota-model-prices" || fields[1].Type != pluginapi.ConfigFieldTypeObject || fields[2].Name != "image-relay-origin" || fields[2].Type != pluginapi.ConfigFieldTypeString {
 		t.Fatal("BPS downstream accounting configuration unavailable across C ABI")
 	}
 	if plugin.Capabilities.AuthProvider == nil || plugin.Capabilities.AuthProvider.Identifier() != "bps" || plugin.Capabilities.CommandLinePlugin == nil {
@@ -126,7 +126,7 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 	}
 	reset := time.Now().Add(24 * time.Hour).Unix()
 	quotaBody = fmt.Sprintf(`{"plan_type":"pro","rate_limit":{"primary_window":{"used_percent":15,"limit_window_seconds":18000,"reset_at":%d}},"credits":{"balance":"20"}}`, reset)
-	quotaRequest := pluginapi.QuotaFetchRequest{Provider: "bps", AuthIndex: "quota-index", Metadata: map[string]any{"access_token": "quota-test", "account_id": "quota-account"}}
+	quotaRequest := pluginapi.QuotaFetchRequest{Provider: "bps", ForceRefresh: true, AuthIndex: "quota-index", Metadata: map[string]any{"access_token": "quota-test", "account_id": "quota-account"}}
 	baseline, _, errBaseline := host.FetchQuota(quotaCtx, quotaRequest)
 	if errBaseline != nil || len(baseline.Summary) != 2 || !strings.Contains(baseline.Groups[0].Buckets[0].Description, "Collecting") {
 		t.Fatalf("BPS USD baseline failed across C ABI: %+v, %v", baseline, errBaseline)

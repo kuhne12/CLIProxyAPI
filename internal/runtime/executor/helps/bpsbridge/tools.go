@@ -149,12 +149,12 @@ func (b *Bridge) collectTools(value any, namespace string) ([]any, error) {
 	for _, raw := range items {
 		item, ok := raw.(object)
 		if !ok {
-			return nil, fmt.Errorf("invalid Basispoints client tool")
+			return nil, fmt.Errorf("invalid upstream client tool")
 		}
 		kind, name := text(item["type"]), text(item["name"])
 		if kind == "namespace" {
 			if name == "" {
-				return nil, fmt.Errorf("basispoints client namespaces require a name")
+				return nil, fmt.Errorf("upstream client namespaces require a name")
 			}
 			nestedNamespace := name
 			if namespace != "" {
@@ -175,10 +175,10 @@ func (b *Bridge) collectTools(value any, namespace string) ([]any, error) {
 			continue
 		}
 		if kind != "function" && kind != "custom" {
-			return nil, fmt.Errorf("basispoints does not support hosted tool %q; use client function or custom tools", kind)
+			return nil, fmt.Errorf("upstream does not support hosted tool %q; use client function or custom tools", kind)
 		}
 		if name == "" {
-			return nil, fmt.Errorf("basispoints client tools require a name")
+			return nil, fmt.Errorf("upstream client tools require a name")
 		}
 		key := name
 		if namespace != "" {
@@ -201,7 +201,7 @@ func (b *Bridge) collectTools(value any, namespace string) ([]any, error) {
 		definition := fingerprint(object{"type": kind, "parameters": entry["parameters"], "format": entry["format"], "strict": item["strict"]})
 		if previous, exists := b.tools[key]; exists {
 			if previous.Definition != definition || previous.Namespace != namespace || previous.Name != name {
-				return nil, fmt.Errorf("conflicting duplicate Basispoints client tool %q", key)
+				return nil, fmt.Errorf("conflicting duplicate upstream client tool %q", key)
 			}
 			continue
 		}
@@ -231,12 +231,12 @@ func isUnsupportedHostedTool(kind string) bool {
 func rebuildNativeHistoryCall(item object) (object, error) {
 	id, name := text(item["call_id"]), text(item["name"])
 	if id == "" || strings.TrimSpace(id) != id || name == "" || strings.TrimSpace(name) != name {
-		return nil, fmt.Errorf("basispoints history recovery requires a complete tool call with nonempty call_id and name")
+		return nil, fmt.Errorf("upstream history recovery requires a complete tool call with nonempty call_id and name")
 	}
 	if value, exists := item["namespace"]; exists {
 		namespace, ok := value.(string)
 		if !ok || strings.TrimSpace(namespace) != namespace {
-			return nil, fmt.Errorf("basispoints history tool namespace must be a string")
+			return nil, fmt.Errorf("upstream history tool namespace must be a string")
 		}
 		if namespace != "" {
 			name = namespace + "." + name
@@ -248,25 +248,25 @@ func rebuildNativeHistoryCall(item object) (object, error) {
 		arguments := item["arguments"]
 		if encoded, ok := arguments.(string); ok {
 			if decode([]byte(encoded), &arguments) != nil {
-				return nil, fmt.Errorf("basispoints history function arguments must contain one valid JSON object")
+				return nil, fmt.Errorf("upstream history function arguments must contain one valid JSON object")
 			}
 		}
 		if args, ok := arguments.(object); !ok || args == nil {
-			return nil, fmt.Errorf("basispoints history function arguments must be a JSON object")
+			return nil, fmt.Errorf("upstream history function arguments must be a JSON object")
 		}
 		envelope["arguments"] = arguments
 	case "custom_tool_call":
 		input, ok := item["input"].(string)
 		if !ok {
-			return nil, fmt.Errorf("basispoints history custom tool input must be a string")
+			return nil, fmt.Errorf("upstream history custom tool input must be a string")
 		}
 		envelope["input"] = input
 	default:
-		return nil, fmt.Errorf("basispoints history recovery requires a function or custom tool call")
+		return nil, fmt.Errorf("upstream history recovery requires a function or custom tool call")
 	}
 	code, err := json.Marshal(envelope)
 	if err != nil {
-		return nil, fmt.Errorf("basispoints history tool arguments cannot be serialized")
+		return nil, fmt.Errorf("upstream history tool arguments cannot be serialized")
 	}
 	arguments, err := json.Marshal(object{
 		"code": string(code), "summary": "Replay a previously requested client tool",
@@ -274,7 +274,7 @@ func rebuildNativeHistoryCall(item object) (object, error) {
 		"destructive":      false, "references": []any{},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("basispoints history transport cannot be serialized")
+		return nil, fmt.Errorf("upstream history transport cannot be serialized")
 	}
 	itemID := text(item["id"])
 	if !strings.HasPrefix(itemID, "fc_") || len(itemID) > 64 {
@@ -293,14 +293,14 @@ func (b *Bridge) translateHistory(input []any) ([]any, error) {
 	for _, raw := range input {
 		item, ok := raw.(object)
 		if !ok {
-			return nil, fmt.Errorf("invalid Basispoints input item")
+			return nil, fmt.Errorf("invalid upstream input item")
 		}
 		delete(item, "internal_chat_message_metadata_passthrough")
 		switch text(item["type"]) {
 		case "additional_tools":
 			continue
 		case "item_reference":
-			return nil, fmt.Errorf("basispoints requires full history; item_reference is unsupported")
+			return nil, fmt.Errorf("upstream requires full history; item_reference is unsupported")
 		case "compaction_trigger":
 			trigger = item
 			continue
@@ -327,7 +327,7 @@ func (b *Bridge) translateHistory(input []any) ([]any, error) {
 			if !seenCalls[id] {
 				native := b.replay.get(b.scope, id)
 				if native == nil {
-					return nil, fmt.Errorf("basispoints original tool item is unavailable for this tool result; start a new conversation")
+					return nil, fmt.Errorf("upstream original tool item is unavailable for this tool result; start a new conversation")
 				}
 				result = append(result, native)
 				seenCalls[id] = true
@@ -378,7 +378,7 @@ func validateHistoryContent(value any) error {
 				return err
 			}
 		default:
-			return fmt.Errorf("basispoints unsupported content category %s; supports text and HTTPS input_image only", contentCategory(part))
+			return fmt.Errorf("upstream unsupported content category %s; supports text and HTTPS input_image only", contentCategory(part))
 		}
 	}
 	return nil
@@ -459,12 +459,12 @@ func (b *Bridge) translateDirectCatalogCall(native object) (object, error) {
 	switch info.Kind {
 	case "function":
 		if kind != "function_call" {
-			return nil, validationError{error: fmt.Errorf("basispoints returned client function tool %q as a %q; no tool was executed", info.Name, kind), reason: "basispoints returned client function tool with incompatible call type"}
+			return nil, validationError{error: fmt.Errorf("upstream returned client function tool %q as a %q; no tool was executed", info.Name, kind), reason: "basispoints returned client function tool with incompatible call type"}
 		}
 		envelope = object{"name": info.Name, "arguments": native["arguments"]}
 	case "custom":
 		if kind != "custom_tool_call" {
-			return nil, validationError{error: fmt.Errorf("basispoints returned client custom tool %q as a %q; no tool was executed", info.Name, kind), reason: "basispoints returned client custom tool with incompatible call type"}
+			return nil, validationError{error: fmt.Errorf("upstream returned client custom tool %q as a %q; no tool was executed", info.Name, kind), reason: "basispoints returned client custom tool with incompatible call type"}
 		}
 		input, ok := native["input"].(string)
 		if !ok {

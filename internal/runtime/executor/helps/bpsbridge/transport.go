@@ -31,7 +31,7 @@ func Frame(doc *ojson.Doc) {
 func Open(ctx context.Context, client *http.Client, endpoint, token string, body []byte) (io.ReadCloser, error) {
 	u, errURL := url.Parse(endpoint)
 	if errURL != nil || u.Host == "" {
-		return nil, fmt.Errorf("invalid BPS endpoint")
+		return nil, fmt.Errorf("invalid upstream endpoint")
 	}
 	platform := "PC"
 	if runtime.GOOS == "darwin" {
@@ -80,7 +80,7 @@ func Open(ctx context.Context, client *http.Client, endpoint, token string, body
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		return nil, &pluginabi.Error{Code: pluginabi.ErrorCodeStreamTruncated, HTTPStatus: 502, Message: "BPS request transmission failed; generation was not replayed"}
+		return nil, &pluginabi.Error{Code: pluginabi.ErrorCodeStreamTruncated, HTTPStatus: 502, Message: "Upstream request transmission failed; generation was not replayed"}
 	}
 	return &socketBody{ctx: ctx, conn: conn, pending: bytes.NewReader(nil), observer: observer}, nil
 }
@@ -112,7 +112,7 @@ func (b *socketBody) Read(p []byte) (int, error) {
 			if b.ctx.Err() != nil {
 				return 0, b.ctx.Err()
 			}
-			return 0, &pluginabi.Error{Code: pluginabi.ErrorCodeStreamTruncated, HTTPStatus: 502, Message: "BPS disconnected before a terminal response; generation was not replayed"}
+			return 0, &pluginabi.Error{Code: pluginabi.ErrorCodeStreamTruncated, HTTPStatus: 502, Message: "Upstream disconnected before a terminal response; generation was not replayed"}
 		}
 		if kind != websocket.MessageText || !ojson.ValidBytes(data) {
 			return 0, protocolFailure()
@@ -126,7 +126,7 @@ func (b *socketBody) Read(p []byte) (int, error) {
 		case "basispoints.response.resume_token", "basispoints.response.metadata", "basispoints.response.upstream_sent", "basispoints.response.heartbeat":
 			continue
 		case "basispoints.response.server_draining":
-			return 0, &pluginabi.Error{Code: pluginabi.ErrorCodeStreamTruncated, HTTPStatus: 503, Message: "BPS server is draining; generation was not replayed"}
+			return 0, &pluginabi.Error{Code: pluginabi.ErrorCodeStreamTruncated, HTTPStatus: 503, Message: "Upstream server is draining; generation was not replayed"}
 		}
 		if event != "error" && !strings.HasPrefix(event, "response.") {
 			return 0, protocolFailure()
@@ -153,7 +153,7 @@ func (b *socketBody) Read(p []byte) (int, error) {
 }
 
 func protocolFailure() error {
-	return &pluginabi.Error{Code: pluginabi.ErrorCodeStreamTruncated, HTTPStatus: 502, Message: "BPS returned an invalid protocol event"}
+	return &pluginabi.Error{Code: pluginabi.ErrorCodeStreamTruncated, HTTPStatus: 502, Message: "Upstream returned an invalid protocol event"}
 }
 
 // EventError keeps provider failures visible to CPA, without echoing upstream secrets.
@@ -167,34 +167,34 @@ func EventError(data []byte) error {
 		detail = ojson.GetBytes(data, "response.error")
 	}
 	code := detail.Get("code").String()
-	failure := &pluginabi.Error{Code: pluginabi.ErrorCodeRequestScoped, HTTPStatus: 400, Message: "BPS rejected the generation request"}
+	failure := &pluginabi.Error{Code: pluginabi.ErrorCodeRequestScoped, HTTPStatus: 400, Message: "Upstream rejected the generation request"}
 	switch code {
 	case "rate_limit_exceeded", "too_many_requests", "concurrent_request_limit":
 		failure.Code = pluginabi.ErrorCodeTransientRateLimit
 		failure.HTTPStatus = 429
 		failure.RetryAfterSeconds = 1
-		failure.Message = "BPS is temporarily rate limited; retry later"
+		failure.Message = "Service is temporarily rate limited; retry later"
 	case "insufficient_quota", "usage_limit_reached", "quota_exceeded":
 		failure.Code = pluginabi.ErrorCodeCredentialQuota
 		failure.HTTPStatus = 429
 		failure.CredentialScoped = true
-		failure.Message = "BPS account quota is exhausted"
+		failure.Message = "Upstream account quota is exhausted"
 	case "invalid_api_key", "invalid_token", "token_expired", "unauthorized":
 		failure.Code = "bps_auth_unavailable"
 		failure.HTTPStatus = 401
-		failure.Message = "BPS authorization is no longer valid; refresh or sign in again"
+		failure.Message = "Upstream authorization is no longer valid; refresh or sign in again"
 	case "model_not_found", "model_not_available", "unsupported_model":
 		failure.Code = pluginabi.ErrorCodeModelNotFound
 		failure.HTTPStatus = 404
-		failure.Message = "This model is unavailable for the BPS credential"
+		failure.Message = "This model is unavailable for the configured credential"
 	case "server_error", "internal_error":
 		failure.Code = pluginabi.ErrorCodeStreamTruncated
 		failure.HTTPStatus = 502
-		failure.Message = "BPS failed after accepting the request; generation was not replayed"
+		failure.Message = "Upstream failed after accepting the request; generation was not replayed"
 	case "basispoints_protocol_error":
 		failure.Code = pluginabi.ErrorCodeStreamTruncated
 		failure.HTTPStatus = 502
-		failure.Message = "BPS returned an unsupported response or tool call"
+		failure.Message = "Upstream returned an unsupported response or tool call"
 	}
 	return failure
 }

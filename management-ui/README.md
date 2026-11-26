@@ -10,7 +10,10 @@ bash management-ui/build.sh /tmp/management.html
 ```
 
 The patch adds BPS quota windows, localized usage labels, estimated dollar values,
-manual reset credit counts, and the existing reset confirmation flow. Unknown
+manual reset credit counts, and the existing reset confirmation flow. BPS cards
+load automatically, refresh every minute while visible, retain last-good values
+on errors, and display observation time and staleness. Accounting and snapshots
+are persisted by the plugin; background sampling continues when the panel closes. Unknown
 credit counts cannot enable redemption. Reset failures are never automatically
 retried. Tests use synthetic credentials and mocked upstream requests; deployment
 verification must never consume a production reset credit.

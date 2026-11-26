@@ -64,7 +64,7 @@ func NormalizeEffort(effort string) (string, error) {
 	case "none", "minimal":
 		return "low", nil
 	default:
-		return "", fmt.Errorf("basispoints reasoning effort %q is unsupported", effort)
+		return "", fmt.Errorf("upstream reasoning effort %q is unsupported", effort)
 	}
 }
 
@@ -85,7 +85,7 @@ func NormalizeEffortForModel(model, effort string) (string, error) {
 		case "none", "minimal":
 			return "low", nil
 		default:
-			return "", fmt.Errorf("basispoints reasoning effort %q is unsupported for %s; use low, medium, high, xhigh or max", effort, model)
+			return "", fmt.Errorf("upstream reasoning effort %q is unsupported for %s; use low, medium, high, xhigh or max", effort, model)
 		}
 	default:
 		return NormalizeEffort(effort)
@@ -149,23 +149,23 @@ func PrepareWithOptions(raw []byte, scope string, replay *ReplayCache, options P
 	}
 	var source object
 	if err := decode(raw, &source); err != nil || source == nil {
-		return nil, nil, fmt.Errorf("invalid Basispoints request JSON")
+		return nil, nil, fmt.Errorf("invalid request JSON")
 	}
 	if err := normalizeContent(source); err != nil {
 		return nil, nil, err
 	}
 	model := strings.TrimSpace(text(source["model"]))
 	if model == "" {
-		return nil, nil, fmt.Errorf("basispoints requires a model")
+		return nil, nil, fmt.Errorf("upstream requires a model")
 	}
 	if text(source["previous_response_id"]) != "" {
-		return nil, nil, fmt.Errorf("basispoints requires expanded history instead of previous_response_id")
+		return nil, nil, fmt.Errorf("upstream requires expanded history instead of previous_response_id")
 	}
 	requested := text(source["reasoning_effort"])
 	if reasoning, ok := source["reasoning"].(object); ok {
 		requested = text(reasoning["effort"])
 		if mode := text(reasoning["mode"]); mode != "" && mode != "standard" {
-			return nil, nil, fmt.Errorf("basispoints does not support reasoning mode %q", mode)
+			return nil, nil, fmt.Errorf("upstream does not support reasoning mode %q", mode)
 		}
 	}
 	// Historical configuration events are metadata. The current request's
@@ -191,7 +191,7 @@ func PrepareWithOptions(raw []byte, scope string, replay *ReplayCache, options P
 		if declared := strings.ToLower(strings.TrimSpace(requested)); slices.Contains(options.EffortLevels, declared) {
 			effort, err = declared, nil
 		} else if err == nil && !slices.Contains(options.EffortLevels, effort) {
-			err = fmt.Errorf("basispoints reasoning effort %q is not advertised for %s", requested, model)
+			err = fmt.Errorf("upstream reasoning effort %q is not advertised for %s", requested, model)
 		}
 	}
 	if err != nil {
@@ -204,7 +204,7 @@ func PrepareWithOptions(raw []byte, scope string, replay *ReplayCache, options P
 	b := &Bridge{RequestedEffort: requested, Effort: effort, tools: make(map[string]tool), unsupportedTools: make(map[string]bool), structured: structured, replay: replay, scope: scope}
 	choice := source["tool_choice"]
 	if choice != nil && text(choice) != "auto" && text(choice) != "none" {
-		return nil, nil, fmt.Errorf("basispoints supports tool_choice auto or none only")
+		return nil, nil, fmt.Errorf("upstream supports tool_choice auto or none only")
 	}
 	var catalog []any
 	if text(choice) != "none" {
@@ -225,7 +225,7 @@ func PrepareWithOptions(raw []byte, scope string, replay *ReplayCache, options P
 				key := text(entry["name"])
 				next := batch.tools[key]
 				if previous, exists := b.tools[key]; exists && (previous.Namespace != next.Namespace || previous.Name != next.Name) {
-					return fmt.Errorf("ambiguous Basispoints client tool namespace")
+					return fmt.Errorf("ambiguous client tool namespace")
 				}
 				b.tools[key] = next
 				if index, exists := positions[key]; exists {
@@ -258,7 +258,7 @@ func PrepareWithOptions(raw []byte, scope string, replay *ReplayCache, options P
 	case []any:
 		input = v
 	default:
-		return nil, nil, fmt.Errorf("basispoints input must be text or a Responses item array")
+		return nil, nil, fmt.Errorf("upstream input must be text or a Responses item array")
 	}
 	translated, err := b.translateHistory(input)
 	if err != nil {
@@ -290,7 +290,7 @@ func PrepareWithOptions(raw []byte, scope string, replay *ReplayCache, options P
 			kinds = append(kinds, kind)
 		}
 		sort.Strings(kinds)
-		warning := "Hosted tools unavailable through Basispoints: " + strings.Join(kinds, ", ")
+		warning := "Hosted tools unavailable through the upstream provider: " + strings.Join(kinds, ", ")
 		b.Warnings = append(b.Warnings, warning)
 		protocol += "\n" + warning + ". These declarations were omitted. Do not claim to have used them. If the task requires one, explain the limitation or use a suitable declared client tool."
 	}

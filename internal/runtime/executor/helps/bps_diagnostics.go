@@ -97,7 +97,7 @@ func (o *BPSObservation) ToolRecoveryError(err error) error {
 		return &failure
 	}
 	return &pluginabi.Error{Code: pluginabi.ErrorCodeStreamTruncated, HTTPStatus: 502,
-		Message: "BPS corrective generation failed; original request was not replayed"}
+		Message: "Upstream corrective generation failed; original request was not replayed"}
 }
 
 // Preserve completed usage if the corrective connection or response fails.

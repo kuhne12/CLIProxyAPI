@@ -89,8 +89,8 @@ var bpsTimingFieldOrder = []string{
 	"terminal_handoff_ms", "response_ready_ms", "executor_done_ms",
 }
 
-// BPS diagnostics contain fixed validation messages and bounded structural
-// metadata, never request bodies, tool arguments or opaque checkpoint state.
+// BPS diagnostics contain bounded validation metadata and complete, redacted
+// upstream error events. Sensitive structured content is removed before logging.
 var bpsDiagnosticFieldOrder = []string{
 	"scope_hash", "tool_catalog_count", "tool_catalog_hash", "tool_catalog_names", "tool_catalog_names_truncated", "payload_input_unchanged",
 	"history_status", "history_checkpoint_id_hash", "history_cache_entries", "history_items_before", "history_items_after",
@@ -100,9 +100,14 @@ var bpsDiagnosticFieldOrder = []string{
 	"pending_tool_count", "missing_tools", "native_tool_type", "native_tool_name", "client_tool_name",
 	"native_call_hash", "native_item_hash", "native_arguments_type", "native_arguments_bytes", "native_transport_shape",
 	"tool_recovery_attempts", "tool_recovery_outcome", "tool_recovery_upstream_bytes",
+	"upstream_error_event", "upstream_error_code", "upstream_error_type", "upstream_error_bytes",
+	"upstream_error_sha256", "upstream_error_redacted", "upstream_error_payload",
 }
 
 func formatLogFieldValue(key string, value any) string {
+	if key == "upstream_error_payload" || key == "upstream_error_code" || key == "upstream_error_type" {
+		return strconv.Quote(fmt.Sprint(value))
+	}
 	if key == "validation_reason" || key == "native_transport_shape" {
 		return strconv.Quote(fmt.Sprint(value))
 	}

@@ -69,9 +69,14 @@ print(matches[0])
 PY
 )
 architecture=$(docker image inspect "$image" --format '{{.Architecture}}')
-plugin="$plugin_dir/linux/$architecture/bps-v0.5.7.so"
+plugin="$plugin_dir/linux/$architecture/bps-v0.5.8.so"
 mkdir -p "$(dirname "$plugin")"
 if test -f "$plugin"; then cp -p "$plugin" "$backup/previous-bps.so"; fi
+quota_state="$plugin_dir/bps-quota-estimates.json"
+if docker exec cli-proxy-api test -f /CLIProxyAPI/plugins/bps-quota-estimates.json; then
+  docker cp cli-proxy-api:/CLIProxyAPI/plugins/bps-quota-estimates.json "$backup/previous-quota-state.json"
+  chmod 600 "$backup/previous-quota-state.json"
+fi
 
 # Resolve the new compose template with the same private override and .env.
 git merge --ff-only "$target"
@@ -90,6 +95,14 @@ rollback() {
   status=$?
   trap - ERR
   if test "$changed" = 1; then
+    # Stop new writers before restoring a pre-migration quota snapshot.
+    docker stop cli-proxy-api >/dev/null || true
+    if test -f "$backup/previous-quota-state.json"; then
+      install -m 600 "$backup/previous-quota-state.json" "$quota_state.rollback"
+      mv -f "$quota_state.rollback" "$quota_state"
+    else
+      rm -f "$quota_state"
+    fi
     cp -p "$backup/config.yaml" config.yaml
     if test -f "$backup/previous-bps.so"; then
       cp -p "$backup/previous-bps.so" "$plugin"

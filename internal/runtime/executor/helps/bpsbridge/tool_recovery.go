@@ -30,22 +30,22 @@ type ToolCorrection struct {
 // fabricated tool success. The caller must apply final payload rules afterwards.
 func (c ToolCorrection) Apply(doc *ojson.Doc) error {
 	if !doc.Get("input").IsArray() {
-		return fmt.Errorf("BPS correction requires expanded input")
+		return fmt.Errorf("upstream correction requires expanded input")
 	}
 	for _, item := range ojson.ParseBytes(c.output).Array() {
 		if err := doc.SetRaw("input.-1", item.Raw); err != nil {
-			return fmt.Errorf("append BPS correction history: %w", err)
+			return fmt.Errorf("append upstream correction history: %w", err)
 		}
 	}
 	if err := doc.Set("input.-1", object{"type": "function_call_output", "call_id": c.callID, "output": unavailableToolResult}); err != nil {
-		return fmt.Errorf("append BPS correction result: %w", err)
+		return fmt.Errorf("append upstream correction result: %w", err)
 	}
 	if err := doc.Set("input.-1", message("developer", clientToolGuard+" The previous native call was unavailable and was not executed. Choose from the current client catalog; do not repeat it.")); err != nil {
 		return err
 	}
 	iteration, err := strconv.ParseInt(doc.Get("metadata.agent_iteration").String(), 10, 64)
 	if err != nil || iteration < 1 || iteration == math.MaxInt64 {
-		return fmt.Errorf("BPS correction requires a valid agent iteration")
+		return fmt.Errorf("upstream correction requires a valid agent iteration")
 	}
 	return doc.Set("metadata.agent_iteration", strconv.FormatInt(iteration+1, 10))
 }
@@ -329,7 +329,7 @@ func (b *Bridge) correctTools(ctx context.Context, body *recoveryBody, writer io
 			return err
 		}
 		if next == nil {
-			return fmt.Errorf("BPS correction did not open a response")
+			return fmt.Errorf("upstream correction did not open a response")
 		}
 		if err := body.replace(next); err != nil {
 			return err

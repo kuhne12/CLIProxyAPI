@@ -38,7 +38,7 @@ func (p *SlotPool) Acquire(ctx context.Context, account string) (PrepareOptions,
 	}
 	if slots.users >= 68 {
 		p.mu.Unlock()
-		return PrepareOptions{}, nil, &pluginabi.Error{Code: pluginabi.ErrorCodeTransientRateLimit, HTTPStatus: 429, RetryAfterSeconds: 1, Message: "BPS request queue is full"}
+		return PrepareOptions{}, nil, &pluginabi.Error{Code: pluginabi.ErrorCodeTransientRateLimit, HTTPStatus: 429, RetryAfterSeconds: 1, Message: "Upstream request queue is full"}
 	}
 	slots.users++
 	p.mu.Unlock()

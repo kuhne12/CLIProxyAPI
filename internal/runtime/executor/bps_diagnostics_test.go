@@ -61,7 +61,7 @@ func TestBPSExecutorCompactionDiagnostics(t *testing.T) {
 				} else {
 					_, generationErr = e.Execute(ctx, auth, req, opts)
 				}
-				if (generationErr != nil) != failed || (failed && generationErr.Error() != "BPS returned an unsupported response or tool call") {
+				if (generationErr != nil) != failed || (failed && generationErr.Error() != "Upstream returned an unsupported response or tool call") {
 					t.Fatalf("unexpected generation error: %v", generationErr)
 				}
 				if requests.Load() != 1 {

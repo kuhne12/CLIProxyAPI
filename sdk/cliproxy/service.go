@@ -122,6 +122,7 @@ type Service struct {
 
 	// bpsCatalogs periodically refreshes account model discovery; protected by cfgMu.
 	bpsCatalogs *bpsCatalogRefresher
+	bpsQuotas   *bpsQuotaRefresher
 
 	// cooldownStateStore persists runtime cooldown state when enabled.
 	cooldownStateStore coreauth.CooldownStateStore

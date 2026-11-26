@@ -8,14 +8,14 @@ The `test-and-deploy` workflow tests a pushed `main` commit, then runs
 `.github/scripts/deploy-production.sh` on the server. The script:
 
 1. Locks deployment, rejects tracked local edits, and requires a fast-forward.
-2. Backs up config, Compose files, `.env`, the previous BPS binary, and image ID.
+2. Backs up config, Compose files, `.env`, the previous BPS binary, quota accounting state, and image ID.
 3. Verifies the customized panel SHA256 and builds an immutable image from the tested commit before replacing the service.
 4. Checks that resolved ports, mounts, environment, and networks are unchanged.
-5. Installs `bps-v0.5.7.so` and enables it in the existing config. Older versioned
+5. Installs `bps-v0.5.8.so` and enables it in the existing config. Older versioned
    libraries remain available for rollback; the loader selects the newest version.
 6. Sets `management.disable-auto-update-panel` so upstream updates cannot replace the customized panel.
 7. Recreates only CPA, checks `/healthz`, BPS registration and the served panel SHA256, then saves the new
-   image name in `.env`. Failure restores the previous config, BPS binary, and image.
+   image name in `.env`. Failure restores the previous config, BPS binary, quota state, and image.
 
 Host-specific settings must live in ignored `docker-compose.override.yml` and
 `.env`; do not edit tracked `docker-compose.yml`. Keep credentials in the existing

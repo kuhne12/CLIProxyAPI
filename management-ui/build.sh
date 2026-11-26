@@ -19,5 +19,5 @@ cd "$source_dir"
 bun=${BUN:-bun}
 test "$("$bun" --version)" = 1.4.3
 "$bun" install --frozen-lockfile
-VERSION=bps-v0.5.7 "$bun" run verify
+VERSION=bps-v0.5.8 "$bun" run verify
 install -m 644 dist/index.html "$output"

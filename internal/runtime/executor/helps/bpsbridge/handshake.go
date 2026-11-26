@@ -53,7 +53,7 @@ func dialWithRetry(ctx context.Context, address string, opts *websocket.DialOpti
 				// Preserve CPA's existing HTTP rejection classification.
 				return nil, &pluginabi.Error{Code: "bps_upstream_rejected", HTTPStatus: resp.StatusCode,
 					RetryAfterSeconds: retryAfterSeconds(resp.Header.Get("Retry-After"), time.Now()),
-					Message:           fmt.Sprintf("BPS WebSocket handshake rejected (HTTP %d)", resp.StatusCode)}
+					Message:           fmt.Sprintf("Upstream WebSocket handshake rejected (HTTP %d)", resp.StatusCode)}
 			}
 			return nil, handshakeStopped("invalid_upgrade", attempt)
 		}
@@ -72,7 +72,7 @@ func handshakeStopped(reason string, attempts int) error {
 	// Request-scoped failures stop CPA's outer credential rotation and retry loop.
 	// This avoids multiplying the bounded handshake attempts or penalizing credentials.
 	return &pluginabi.Error{Code: pluginabi.ErrorCodeRequestScoped, HTTPStatus: http.StatusBadGateway,
-		Message: fmt.Sprintf("BPS WebSocket connection failed before sending the request (%s; attempts=%d)", reason, attempts)}
+		Message: fmt.Sprintf("Upstream WebSocket connection failed before sending the request (%s; attempts=%d)", reason, attempts)}
 }
 
 func waitHandshakeRetry(ctx context.Context, delay time.Duration) error {

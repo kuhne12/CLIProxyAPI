@@ -79,7 +79,7 @@ func TestProtocolDiagnosticsPreserveFailureAndRedactContent(t *testing.T) {
 					var failed bool
 					if errRead := readEvents(bytes.NewReader(raw), func(_ string, data []byte) error {
 						if errEvent := EventError(data); errEvent != nil {
-							failed = errEvent.Error() == "BPS returned an unsupported response or tool call"
+							failed = errEvent.Error() == "Upstream returned an unsupported response or tool call"
 						}
 						return nil
 					}); errRead != nil || !failed {

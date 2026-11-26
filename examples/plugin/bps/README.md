@@ -301,28 +301,42 @@ utilization. This implementation uses deltas between quota observations, so a
 new installation never mistakes partial local history for full-window costs:
 
 ```text
-estimated total USD = observed USD cost delta * 100 / used percentage-point delta
+estimated total USD = sum(valid interval costs) * 100 / sum(valid interval percentage-point deltas)
 estimated remaining USD = estimated total USD * current remaining fraction
 ```
 
-The first query establishes a baseline. After normal BPS traffic increases usage
-by at least one percentage point, query again to obtain USD metrics. Until then,
-the window description reports sampling progress; unknown values never become
-zero dollars. Queries do not generate model requests. The usage callback does no
-network or disk I/O and retains only bounded numeric counters and hashed IDs.
+From **0.5.8**, the matching CPA service queries enabled BPS accounts once per
+minute, independently of panel visits. These are read-only account-usage queries,
+not model generations. The panel loads visible BPS accounts automatically, polls
+once per minute while visible, and retains the last successful snapshot during
+refresh or an error. It displays the actual observation time and marks stale data.
+The plugin shares concurrent refreshes and caches each account for one minute;
+failed refreshes are throttled too. Reset credits are never redeemed automatically.
 
-Accounting follows `cache-creation-as-input`, counts total input only once, and
-does not add reasoning tokens to output a second time. Credentials and primary
-quota windows are isolated; code-review and additional limits are not priced.
-Duplicate execution IDs are ignored. Failed or unpriced usage restarts the observation
-interval while retaining an already completed estimate. Quota resets, decreasing
-utilization, plan changes, and pricing changes invalidate the completed estimate.
-Since 0.5.3, completed estimates are atomically stored in
-`plugins/bps-quota-estimates.json` with private permissions and hashed credential
-identifiers. Keep this directory persistent. After restart, the next quota query
-checks the saved plan/window and begins a fresh observation interval; traffic
-while CPA was offline is never included in a new calibration. Partial samples
-remain memory-only. Read/write failures fall back to fresh/in-memory estimation.
+The first successful query establishes a baseline. Once valid samples cover at
+least one percentage point, the window displays USD metrics. Valid disjoint
+intervals are combined by their consumed percentage points, so a small new sample
+cannot replace a mature estimate. Repeated reads do not count a sample twice.
+Windows are keyed by duration rather than their changing position in the response.
+The persisted one-point threshold uses the same floating-point tolerance as live
+sampling, including migration from the 0.5.7 state file.
+
+Accounting follows configured model, cache, tier and context prices. Total input
+and reasoning output are not counted twice. Failed or unpriced usage and gaps
+start a fresh interval while retaining prior valid samples. Plan changes, genuine
+quota refills, reset times and price changes invalidate the affected calibration.
+External or offline usage cannot be reliably priced and is excluded from new
+intervals; missing historical consumption cannot be reconstructed retrospectively.
+
+The private, atomic **version 2** file at `plugins/bps-quota-estimates.json` stores
+cumulative priced cost, uncertainty counters, bounded hashed request IDs, paired
+samples (including partial ones) and normalized quota snapshots. Usage callbacks
+persist their accounting without waiting for a UI query; they perform no network
+I/O. Credentials, prompts and raw token records are never stored there. Keep the
+plugins mount persistent. Restart retains the last good estimate and snapshot,
+but starts a new interval after validating the live plan and reset window. File
+errors are logged and current in-memory values remain usable. The deployment
+script backs up this file and restores it if the new release is rolled back.
 
 These amounts are **estimated API value, not an official or redeemable account
 balance**. External usage on the same upstream account, changing model mix, rounded
@@ -479,8 +493,8 @@ shape, pending tool count and at most eight missing tool name/identity hashes.
 Use the normal CPA request ID to join this warning with its timing record and
 access log. A `tool_translation` failure differs from
 `terminal_tool_completeness` (an earlier tool item is absent from the terminal
-output) and `structured_output` validation failure. The client-facing error
-remains unchanged.
+output) and `structured_output` validation failure. Client-facing messages use provider-neutral text; HTTP status and scheduler
+classification remain unchanged.
 
 These logs contain no prompts, code, argument values, credentials, encrypted
 compaction state or raw external parser errors. Checkpoint/call/item identities
@@ -489,6 +503,33 @@ is `-1` when the native argument value is not a string. An unclassified internal
 error is reported with a generic reason rather than logging its raw message.
 The bridge catalog is collected before final payload rules;
 `payload_input_unchanged=false` identifies input changes made by those rules.
+
+### Complete upstream error diagnostics
+
+The native executor records each WebSocket **error** or **response.failed** event
+as **BPS upstream error** at warn level, before normalizing the public response.
+The record includes the CPA request ID, original event/code/type, byte length,
+SHA-256, and the complete sanitized JSON in **upstream_error_payload**. Error
+messages are not shortened to the usual diagnostic excerpt. Provider-specific
+fields such as concurrency limits and retry delays remain available, including
+errors from the one permitted corrective generation.
+
+Credentials, authorization headers, known bearer tokens, prompt/history fields,
+tool arguments and encrypted checkpoints are redacted. Malformed or ambiguous
+JSON fails closed, retaining the size/hash and a logging-error marker. Control
+characters are escaped so upstream text cannot inject log lines. Successful
+response contents are not logged by this diagnostic. Existing log rotation and
+retention still apply; this is complete error-event logging, not an archive of
+all requests or successful responses. HTTP handshake rejection bodies are not
+captured by this WebSocket event logger.
+
+Clients receive provider-neutral messages. The three temporary-limit codes
+(rate_limit_exceeded, too_many_requests, concurrent_request_limit) all use
+**Service is temporarily rate limited; retry later**. Other error classifications,
+HTTP statuses, retry behavior and machine-readable codes stay unchanged. The
+server log preserves the original code and details that the public mapper hides.
+The existing one-second retry hint is a local default, not an upstream-provided
+wait time; any upstream delay is preserved separately in the error payload.
 
 ## Scope and compatibility
 

@@ -48,7 +48,6 @@ func (*BPSExecutor) Identifier() string { return "bps" }
 
 func (e *BPSExecutor) Execute(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options) (resp coreexecutor.Response, err error) {
 	observation := helps.NewBPSObservation(len(req.Payload))
-	ctx = bpsbridge.WithObserver(ctx, observation.Observer())
 	defer func() { observation.Finish(ctx, err) }()
 	cacheCreationAsInput := helps.BPSCacheCreationAsInput(e.cfg)
 	reporter := helps.NewExecutorUsageReporter(ctx, e, req.Model, auth)
@@ -113,7 +112,6 @@ func (e *BPSExecutor) Execute(ctx context.Context, auth *coreauth.Auth, req core
 
 func (e *BPSExecutor) ExecuteStream(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options) (result *coreexecutor.StreamResult, err error) {
 	observation := helps.NewBPSObservation(len(req.Payload))
-	ctx = bpsbridge.WithObserver(ctx, observation.Observer())
 	defer func() {
 		if err != nil {
 			observation.Finish(ctx, err)
@@ -200,16 +198,17 @@ func (e *BPSExecutor) ExecuteStream(ctx context.Context, auth *coreauth.Auth, re
 
 func (e *BPSExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options, reporter *helps.UsageReporter, observation *helps.BPSObservation) (io.ReadCloser, []byte, error) {
 	if opts.Alt == "responses/compact" {
-		return nil, nil, &pluginabi.Error{Code: pluginabi.ErrorCodeNotImplemented, HTTPStatus: 501, Message: "BPS requires complete history and has no standalone compaction endpoint"}
+		return nil, nil, &pluginabi.Error{Code: pluginabi.ErrorCodeNotImplemented, HTTPStatus: 501, Message: "Upstream requires complete history and has no standalone compaction endpoint"}
 	}
 	if auth == nil || auth.Provider != "bps" {
-		return nil, nil, &pluginabi.Error{Code: "bps_auth_required", HTTPStatus: 401, Message: "A BPS authorization file is required"}
+		return nil, nil, &pluginabi.Error{Code: "bps_auth_required", HTTPStatus: 401, Message: "An upstream authorization file is required"}
 	}
 	token, _ := auth.Metadata["access_token"].(string)
 	account, _ := auth.Metadata["account_id"].(string)
 	if token == "" || account == "" {
-		return nil, nil, &pluginabi.Error{Code: "bps_auth_required", HTTPStatus: 401, Message: "BPS credential is missing its access token or account ID"}
+		return nil, nil, &pluginabi.Error{Code: "bps_auth_required", HTTPStatus: 401, Message: "Upstream credential is missing its access token or account ID"}
 	}
+	ctx = bpsbridge.WithObserver(ctx, observation.ObserverWithErrorLogging(ctx, token))
 	subject, _ := auth.Metadata["sub"].(string)
 	queueDone := observation.Stage("queue")
 	options, release, errSlot := bpsSlots.Acquire(ctx, account+"\x00"+subject)
@@ -266,7 +265,7 @@ func (e *BPSExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexe
 	scope := hex.EncodeToString(scopeHash[:])
 	rememberCompaction, errHistory := helps.PrepareBPSHistory(doc, scope, &options, observation)
 	if errHistory != nil {
-		return nil, nil, fmt.Errorf("prepare BPS compacted history: %w", errHistory)
+		return nil, nil, fmt.Errorf("prepare compacted history: %w", errHistory)
 	}
 	if errImage := e.imageRelay.RewriteDoc(doc, scope, helps.BPSImageRelayOrigin(e.cfg)); errImage != nil {
 		status := http.StatusBadRequest
@@ -329,7 +328,7 @@ func (e *BPSExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexe
 			finalize.FinalizeDoc(next)
 			// Validation is read-only: never restore history removed by user rules.
 			if next.Get("input").Raw != correctionInput {
-				return nil, fmt.Errorf("BPS corrective history was changed by final payload rules")
+				return nil, fmt.Errorf("Upstream corrective history was changed by final payload rules")
 			}
 			nextPayload := next.Bytes()
 			observation.RecordToolRecoveryBytes(len(nextPayload))
@@ -344,11 +343,11 @@ func (e *BPSExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexe
 
 // These endpoints have no BPS equivalent. The plugin owns OAuth refresh.
 func (*BPSExecutor) CountTokens(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (coreexecutor.Response, error) {
-	return coreexecutor.Response{}, &pluginabi.Error{Code: pluginabi.ErrorCodeNotImplemented, HTTPStatus: 501, Message: "BPS has no token counting endpoint"}
+	return coreexecutor.Response{}, &pluginabi.Error{Code: pluginabi.ErrorCodeNotImplemented, HTTPStatus: 501, Message: "Upstream has no token counting endpoint"}
 }
 func (*BPSExecutor) HttpRequest(context.Context, *coreauth.Auth, *http.Request) (*http.Response, error) {
-	return nil, &pluginabi.Error{Code: pluginabi.ErrorCodeNotImplemented, HTTPStatus: 501, Message: "BPS supports generation through its WebSocket executor only"}
+	return nil, &pluginabi.Error{Code: pluginabi.ErrorCodeNotImplemented, HTTPStatus: 501, Message: "Upstream supports generation through its WebSocket executor only"}
 }
 func (*BPSExecutor) Refresh(_ context.Context, auth *coreauth.Auth) (*coreauth.Auth, error) {
-	return auth, fmt.Errorf("BPS refresh requires the enabled BPS authorization plugin")
+	return auth, fmt.Errorf("Credential refresh requires the enabled authorization plugin")
 }

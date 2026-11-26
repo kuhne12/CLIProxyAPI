@@ -52,22 +52,22 @@ func normalizeContent(source object) error {
 						switch text(source["type"]) {
 						case "base64":
 							if text(source["media_type"]) == "" || text(source["data"]) == "" {
-								return fmt.Errorf("basispoints image source requires media_type and data")
+								return fmt.Errorf("upstream image source requires media_type and data")
 							}
 							result["image_url"] = "data:" + text(source["media_type"]) + ";base64," + text(source["data"])
 						case "url":
 							result["image_url"] = source["url"]
 						default:
-							return fmt.Errorf("basispoints image source supports base64 or url only")
+							return fmt.Errorf("upstream image source supports base64 or url only")
 						}
 					} else if text(part["mimeType"]) != "" && text(part["data"]) != "" {
 						result["image_url"] = "data:" + text(part["mimeType"]) + ";base64," + text(part["data"])
 					} else {
-						return fmt.Errorf("basispoints image requires a source or MCP mimeType and data")
+						return fmt.Errorf("upstream image requires a source or MCP mimeType and data")
 					}
 				}
 				if text(result["image_url"]) == "" {
-					return fmt.Errorf("basispoints image requires image_url; file IDs are unsupported")
+					return fmt.Errorf("upstream image requires image_url; file IDs are unsupported")
 				}
 				parts[i] = result
 			}
@@ -93,14 +93,14 @@ func contentCategory(part object) string {
 func validateAgentMessageContent(value any) error {
 	parts, ok := value.([]any)
 	if !ok {
-		return fmt.Errorf("basispoints agent_message content must be an array")
+		return fmt.Errorf("upstream agent_message content must be an array")
 	}
 	for _, raw := range parts {
 		part, _ := raw.(object)
 		if text(part["type"]) == "encrypted_content" {
 			encrypted, ok := part["encrypted_content"].(string)
 			if !ok || encrypted == "" {
-				return fmt.Errorf("basispoints agent_message encrypted_content must be a nonempty string")
+				return fmt.Errorf("upstream agent_message encrypted_content must be a nonempty string")
 			}
 			continue
 		}

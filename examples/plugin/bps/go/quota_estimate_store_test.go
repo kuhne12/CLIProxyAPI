@@ -46,12 +46,12 @@ func TestBPSQuotaPersistenceRestartsSamplingWithoutLosingEstimate(t *testing.T) 
 		t.Fatalf("estimate did not survive restart: %+v", after.Summary)
 	}
 	key, _ := quotaEstimateKey("test-index", "")
-	if !e.accounts[key].Windows["0:7d"].Started.Equal(now.Add(time.Second)) {
+	if !e.accounts[key].Windows["7d"].Started.Equal(now.Add(time.Second)) {
 		t.Fatal("sampling baseline crossed restart")
 	}
 	e.observe(quotaTestRecord(), now)
 	after = quotaTestAnnotate(e, .69, now.Add(time.Second))
-	if len(after.Summary) != 2 || math.Abs(after.Summary[1].Value-146) > 1e-8 {
+	if len(after.Summary) != 2 || math.Abs(after.Summary[1].Value-292.0/3) > 1e-8 {
 		t.Fatal("fresh calibration included offline usage")
 	}
 	if err := e.configure(quotaConfigRequest(t, quotaTestPrices+"cache-creation-as-input: true\n"), false); err != nil {
@@ -126,7 +126,7 @@ func TestBPSQuotaRetainsCalibrationAcrossObservationGaps(t *testing.T) {
 			}
 			e.observe(quotaTestRecord(), now)
 			q = quotaTestAnnotate(e, .74, now)
-			if len(q.Summary) != 2 || math.Abs(q.Summary[1].Value-146) > 1e-8 {
+			if len(q.Summary) != 2 || math.Abs(q.Summary[1].Value-292.0/3) > 1e-8 {
 				t.Fatal("partial sample polluted fresh calibration")
 			}
 		})

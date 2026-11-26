@@ -48,5 +48,5 @@ func ConsumeBPSEvents(body io.Reader, consume func([]byte) error) error {
 }
 
 func BPSMissingTerminal() error {
-	return &pluginabi.Error{Code: pluginabi.ErrorCodeStreamTruncated, HTTPStatus: 502, Message: "BPS stream ended without a completed response; generation was not replayed"}
+	return &pluginabi.Error{Code: pluginabi.ErrorCodeStreamTruncated, HTTPStatus: 502, Message: "Upstream stream ended without a completed response; generation was not replayed"}
 }

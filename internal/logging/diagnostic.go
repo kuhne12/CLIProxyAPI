@@ -47,6 +47,14 @@ func SafeDiagnosticForLog(message string) string {
 	return truncateDiagnosticLogExcerpt(excerpt, sourceTruncated)
 }
 
+// RedactDiagnosticSecrets preserves diagnostic detail while masking recognizable
+// credentials. Callers must escape control characters before writing log lines.
+func RedactDiagnosticSecrets(message string) string {
+	message = urlUserinfoLogPattern.ReplaceAllString(message, "${1}[REDACTED]@")
+	message = sensitiveLogAssignmentPattern.ReplaceAllString(message, "${1}\"[REDACTED]\"")
+	return authorizationLogPattern.ReplaceAllString(message, "${1} [REDACTED]")
+}
+
 // SafeErrorDiagnostic extracts only allowlisted failure signals from an
 // arbitrary error. It never carries the original free-form error text.
 func SafeErrorDiagnostic(err error) string {

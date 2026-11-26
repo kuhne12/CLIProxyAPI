@@ -2011,6 +2011,8 @@ type QuotaDescribeResponse struct {
 
 // QuotaFetchRequest carries credential context for querying quota.
 type QuotaFetchRequest struct {
+	// ForceRefresh requests an upstream observation instead of a fresh cached snapshot.
+	ForceRefresh bool `json:"force_refresh,omitempty"`
 	// AuthIndex identifies the credential index.
 	AuthIndex string `json:"auth_index"`
 	// AuthID identifies the credential ID.
@@ -2128,6 +2130,10 @@ type QuotaMetric struct {
 
 // QuotaFetchResponse carries normalized quota information for management UI rendering.
 type QuotaFetchResponse struct {
+	// ObservedAt is the last successful upstream observation, not the cache read time.
+	ObservedAt string `json:"observedAt,omitempty"`
+	// Stale marks a retained snapshot after a failed or overdue refresh.
+	Stale              bool               `json:"stale,omitempty"`
 	Subscription       *QuotaSubscription `json:"subscription,omitempty"`
 	Summary            []QuotaMetric      `json:"summary,omitempty"`
 	ServerTimeOffsetMs int64              `json:"serverTimeOffsetMs,omitempty"`

@@ -33,52 +33,52 @@ func prepareStructuredOutput(raw any) (*structuredOutput, error) {
 	}
 	config, ok := raw.(object)
 	if !ok {
-		return nil, fmt.Errorf("basispoints text must be an object")
+		return nil, fmt.Errorf("upstream text must be an object")
 	}
 	if config["format"] == nil {
 		return nil, nil
 	}
 	format, ok := config["format"].(object)
 	if !ok {
-		return nil, fmt.Errorf("basispoints text.format must be an object")
+		return nil, fmt.Errorf("upstream text.format must be an object")
 	}
 	kind := text(format["type"])
 	if kind == "text" {
 		return nil, nil
 	}
 	if kind != "json_object" && kind != "json_schema" {
-		return nil, fmt.Errorf("basispoints text.format requires text, json_object or json_schema")
+		return nil, fmt.Errorf("upstream text.format requires text, json_object or json_schema")
 	}
 	for key := range format {
 		if key == "type" || (kind == "json_schema" && (key == "name" || key == "schema" || key == "strict" || key == "description")) {
 			continue
 		}
-		return nil, fmt.Errorf("basispoints text.format contains an unsupported field")
+		return nil, fmt.Errorf("upstream text.format contains an unsupported field")
 	}
 	result := &structuredOutput{format: format}
 	if kind == "json_object" {
 		return result, nil
 	}
 	if !structuredFormatName.MatchString(text(format["name"])) {
-		return nil, fmt.Errorf("basispoints json_schema requires a name of 1-64 letters, digits, underscores or hyphens")
+		return nil, fmt.Errorf("upstream json_schema requires a name of 1-64 letters, digits, underscores or hyphens")
 	}
 	if value := format["strict"]; value != nil {
 		if _, ok := value.(bool); !ok {
-			return nil, fmt.Errorf("basispoints json_schema strict must be a boolean")
+			return nil, fmt.Errorf("upstream json_schema strict must be a boolean")
 		}
 	}
 	if value := format["description"]; value != nil {
 		if _, ok := value.(string); !ok {
-			return nil, fmt.Errorf("basispoints json_schema description must be a string")
+			return nil, fmt.Errorf("upstream json_schema description must be a string")
 		}
 	}
 	schema, ok := format["schema"].(object)
 	if !ok || schema == nil {
-		return nil, fmt.Errorf("basispoints json_schema requires a schema object")
+		return nil, fmt.Errorf("upstream json_schema requires a schema object")
 	}
 	encoded, err := json.Marshal(schema)
 	if err != nil || len(encoded) > 1<<20 {
-		return nil, fmt.Errorf("basispoints structured output schema exceeds 1 MiB")
+		return nil, fmt.Errorf("upstream structured output schema exceeds 1 MiB")
 	}
 	compiler := jsonschema.NewCompiler()
 	compiler.DefaultDraft(jsonschema.Draft2020)
@@ -87,11 +87,11 @@ func prepareStructuredOutput(raw any) (*structuredOutput, error) {
 	// never fetch a URL or read a server file while compiling them.
 	compiler.UseLoader(localSchemaLoader{})
 	if err := compiler.AddResource(structuredSchemaURL, schema); err != nil {
-		return nil, fmt.Errorf("basispoints structured output schema is invalid")
+		return nil, fmt.Errorf("upstream structured output schema is invalid")
 	}
 	result.schema, err = compiler.Compile(structuredSchemaURL)
 	if err != nil {
-		return nil, fmt.Errorf("basispoints structured output schema is invalid or references an external resource")
+		return nil, fmt.Errorf("upstream structured output schema is invalid or references an external resource")
 	}
 	return result, nil
 }

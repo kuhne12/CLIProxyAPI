@@ -46,16 +46,23 @@ type quotaEstimateWindow struct {
 	TotalUSD      float64
 	SampleCost    float64
 	SamplePoints  float64
+	PriorCost     float64
+	PriorPoints   float64
 }
 
 type quotaEstimateAccount struct {
-	Cost    float64
-	Unknown uint64
-	Plan    string
-	Touched time.Time
-	Windows map[string]*quotaEstimateWindow
-	Seen    map[[32]byte]bool
-	Order   [][32]byte
+	Cost          float64
+	Unknown       uint64
+	Plan          string
+	Touched       time.Time
+	Windows       map[string]*quotaEstimateWindow
+	Seen          map[[32]byte]bool
+	Order         [][32]byte
+	Snapshot      *pluginapi.QuotaFetchResponse
+	ObservedAt    time.Time
+	AttemptedAt   time.Time
+	RefreshFailed bool
+	Fetching      chan struct{}
 }
 
 type bpsQuotaEstimator struct {
@@ -129,7 +136,7 @@ func quotaEstimateKey(index, id string) ([32]byte, bool) {
 	return [32]byte{}, false
 }
 
-// Only bounded numeric counters and hashed identifiers are retained in memory.
+// Only bounded numeric counters, quota snapshots and hashed identifiers are retained.
 func (e *bpsQuotaEstimator) account(key [32]byte, now time.Time) *quotaEstimateAccount {
 	a := e.accounts[key]
 	if a == nil {
@@ -176,6 +183,7 @@ func (e *bpsQuotaEstimator) observe(record pluginapi.UsageRecord, now time.Time)
 		a.Seen[id] = true
 		a.Order = append(a.Order, id)
 	}
+	defer e.saveCalibrationsLocked()
 	// Failed executions can consume upstream quota without complete usage.
 	cost, priced := quotaUsageCost(record, e.config)
 	if record.Failed || !priced {
@@ -263,10 +271,14 @@ func finiteQuotaValue(value float64) bool {
 }
 
 func (e *bpsQuotaEstimator) annotate(req quotaFetchRequest, quota *pluginapi.QuotaFetchResponse, now time.Time) {
-	key, identified := quotaEstimateKey(req.AuthIndex, req.AuthID)
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	defer e.saveCalibrationsLocked()
+	e.annotateLocked(req, quota, now)
+	e.saveCalibrationsLocked()
+}
+
+func (e *bpsQuotaEstimator) annotateLocked(req quotaFetchRequest, quota *pluginapi.QuotaFetchResponse, now time.Time) {
+	key, identified := quotaEstimateKey(req.AuthIndex, req.AuthID)
 	if len(e.config.Prices) == 0 {
 		return
 	}
@@ -293,7 +305,7 @@ func (e *bpsQuotaEstimator) annotate(req quotaFetchRequest, quota *pluginapi.Quo
 				a.Windows = make(map[string]*quotaEstimateWindow)
 			}
 			used := (1 - bucket.RemainingFraction) * 100
-			windowKey := fmt.Sprintf("%d:%s", bi, bucket.Window)
+			windowKey := bucket.Window
 			w := a.Windows[windowKey]
 			// Relative reset times can vary slightly because of HTTP date precision.
 			resetChanged := w != nil && math.Abs(reset.Sub(w.Reset).Seconds()) > 60
@@ -301,6 +313,7 @@ func (e *bpsQuotaEstimator) annotate(req quotaFetchRequest, quota *pluginapi.Quo
 			// Keep the completed calibration, but start a new observation interval.
 			if w != nil && w.Restored {
 				w.Restored = false
+				w.PriorCost, w.PriorPoints = w.SampleCost, w.SamplePoints
 				w.Started, w.BaseUsed, w.BaseCost, w.BaseUnknown = now, used, a.Cost, a.Unknown
 			}
 			if w == nil || resetChanged || used+1e-8 < w.LastUsed {
@@ -308,23 +321,33 @@ func (e *bpsQuotaEstimator) annotate(req quotaFetchRequest, quota *pluginapi.Quo
 				a.Windows[windowKey] = w
 			}
 			if w.BaseUnknown != a.Unknown || a.Cost < w.BaseCost || (w.TotalUSD > 0 && used > w.LastUsed+1e-8 && a.Cost == w.LastCost) {
+				w.PriorCost, w.PriorPoints = w.SampleCost, w.SamplePoints
 				w.Started, w.BaseUsed, w.BaseCost, w.BaseUnknown = now, used, a.Cost, a.Unknown
 			}
 			w.LastUsed, w.LastCost = used, a.Cost
 			deltaUsed, deltaCost := used-w.BaseUsed, a.Cost-w.BaseCost
 			if deltaUsed+1e-8 >= quotaEstimateMinPoints && deltaCost == 0 {
+				w.PriorCost, w.PriorPoints = w.SampleCost, w.SamplePoints
 				w.Started, w.BaseUsed, w.BaseCost, w.BaseUnknown = now, used, a.Cost, a.Unknown
 				deltaUsed = 0
 			}
-			if deltaUsed+1e-8 >= quotaEstimateMinPoints && deltaCost > 0 {
-				estimate := deltaCost * 100 / deltaUsed
+			if deltaUsed > 1e-8 && deltaCost > 0 {
+				// Weight disjoint valid intervals by their quota consumption. Repeated
+				// reads replace only the current interval, never count it twice.
+				sampleCost, samplePoints := w.PriorCost+deltaCost, w.PriorPoints+deltaUsed
+				estimate := sampleCost * 100 / samplePoints
 				if finiteQuotaValue(estimate) && estimate > 0 {
-					w.TotalUSD, w.SampleCost, w.SamplePoints = estimate, deltaCost, deltaUsed
-					w.SampleStarted = w.Started
+					w.SampleCost, w.SamplePoints = sampleCost, samplePoints
+					if samplePoints+1e-8 >= quotaEstimateMinPoints {
+						w.TotalUSD = estimate
+					}
+					if w.SampleStarted.IsZero() {
+						w.SampleStarted = w.Started
+					}
 				}
 			}
 			if w.TotalUSD <= 0 {
-				bucket.Description = fmt.Sprintf("Collecting USD estimate samples: $%.4f priced usage, %.2f percentage points since %s. Requires at least 1 percentage point and priced BPS usage; re-query after normal usage.", deltaCost, deltaUsed, w.Started.UTC().Format(time.RFC3339))
+				bucket.Description = fmt.Sprintf("Collecting USD estimate samples: $%.4f priced usage, %.2f percentage points since %s. Requires at least 1 percentage point and priced usage; samples update automatically.", deltaCost, deltaUsed, w.Started.UTC().Format(time.RFC3339))
 				continue
 			}
 			prefix := fmt.Sprintf("bps_estimated_%d_", bi)

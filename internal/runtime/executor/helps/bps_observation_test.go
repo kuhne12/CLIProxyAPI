@@ -137,3 +137,42 @@ func TestBPSObservationConcurrentStreamAndHeaders(t *testing.T) {
 		t.Fatal("missing concurrent observation")
 	}
 }
+
+func TestBPSObservationToolRecoveryOutcomeReachesLog(t *testing.T) {
+	hook := logtest.NewGlobal()
+	previous := log.GetLevel()
+	log.SetLevel(log.InfoLevel)
+	t.Cleanup(func() { log.SetLevel(previous) })
+	for _, tc := range []struct {
+		want string
+		err  error
+	}{
+		{want: "completed"},
+		{want: "failed", err: errors.New("private-upstream-message")},
+		{want: "cancelled", err: context.Canceled},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			hook.Reset()
+			o := NewBPSObservation(17)
+			o.RecordToolRecovery("attempted")
+			o.RecordToolRecoveryBytes(1234)
+			o.Finish(context.Background(), tc.err)
+			entry := hook.LastEntry()
+			if entry == nil || entry.Data["tool_recovery_outcome"] != tc.want || entry.Data["tool_recovery_attempts"] != 1 {
+				t.Fatal("final recovery outcome was not recorded")
+			}
+			formatted, err := (&logging.LogFormatter{}).Format(entry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, field := range []string{"tool_recovery_attempts=1", "tool_recovery_outcome=" + tc.want, "tool_recovery_upstream_bytes=1234"} {
+				if !strings.Contains(string(formatted), field) {
+					t.Errorf("application formatter lost %s", field)
+				}
+			}
+			if strings.Contains(string(formatted), "private-upstream-message") {
+				t.Fatal("upstream content leaked into recovery timing")
+			}
+		})
+	}
+}

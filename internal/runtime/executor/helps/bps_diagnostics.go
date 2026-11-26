@@ -2,9 +2,11 @@ package helps
 
 import (
 	"context"
+	"errors"
 
 	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/bpsbridge"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -65,4 +67,58 @@ func (o *BPSObservation) ConfirmCompaction(id string) {
 
 func (o *BPSObservation) SkipCompactionConfirmation() {
 	o.recordDiagnostic(log.Fields{"compaction_confirmation": "payload_input_changed"})
+}
+
+func (o *BPSObservation) RecordToolRecovery(status string) {
+	o.recordDiagnostic(log.Fields{"tool_recovery_attempts": 1, "tool_recovery_outcome": status})
+}
+
+func (o *BPSObservation) RecordToolRecoveryBytes(size int) {
+	o.recordDiagnostic(log.Fields{"tool_recovery_upstream_bytes": size})
+}
+
+// A corrective failure must not make the scheduler replay the accepted first
+// generation, even if the correction itself was rejected before generation.
+func (o *BPSObservation) ToolRecoveryError(err error) error {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	o.mu.Lock()
+	attempted := o.diagnostics["tool_recovery_attempts"] == 1
+	o.mu.Unlock()
+	if !attempted {
+		return err
+	}
+	var upstream *pluginabi.Error
+	if errors.As(err, &upstream) {
+		failure := *upstream
+		failure.Code = pluginabi.ErrorCodeStreamTruncated
+		failure.Retryable, failure.CredentialScoped = false, false
+		return &failure
+	}
+	return &pluginabi.Error{Code: pluginabi.ErrorCodeStreamTruncated, HTTPStatus: 502,
+		Message: "BPS corrective generation failed; original request was not replayed"}
+}
+
+// Preserve completed usage if the corrective connection or response fails.
+func (o *BPSObservation) ObserveFailureUsage(data []byte) {
+	if !ojson.GetBytes(data, "response.usage").Exists() {
+		return
+	}
+	if detail, ok := ParseCodexUsage(data); ok {
+		o.mu.Lock()
+		o.failureUsage, o.hasFailureUsage = detail, true
+		o.mu.Unlock()
+	}
+}
+
+func (o *BPSObservation) PublishFailureUsage(ctx context.Context, reporter *UsageReporter, err error) {
+	o.mu.Lock()
+	detail, found := o.failureUsage, o.hasFailureUsage
+	o.mu.Unlock()
+	if found {
+		reporter.PublishFailureWithDetail(ctx, detail, err)
+	} else {
+		reporter.PublishFailure(ctx, err)
+	}
 }

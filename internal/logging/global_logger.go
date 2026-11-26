@@ -99,6 +99,7 @@ var bpsDiagnosticFieldOrder = []string{
 	"validation_stage", "validation_reason", "validation_event", "validation_output_index", "validation_compaction_seen",
 	"pending_tool_count", "missing_tools", "native_tool_type", "native_tool_name", "client_tool_name",
 	"native_call_hash", "native_item_hash", "native_arguments_type", "native_arguments_bytes", "native_transport_shape",
+	"tool_recovery_attempts", "tool_recovery_outcome", "tool_recovery_upstream_bytes",
 }
 
 func formatLogFieldValue(key string, value any) string {

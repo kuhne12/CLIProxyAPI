@@ -298,6 +298,9 @@ func PrepareWithOptions(raw []byte, scope string, replay *ReplayCache, options P
 		protocol += "\n" + structured.instructions()
 	}
 	prologue = append(prologue, message("developer", protocol))
+	if len(catalog) > 0 {
+		translated = append(translated, message("developer", clientToolGuard))
+	}
 	cacheKey := text(source["prompt_cache_key"])
 	turnEnd := 0
 	if len(input) > 0 {

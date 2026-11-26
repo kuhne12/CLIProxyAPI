@@ -11,6 +11,7 @@ import (
 
 	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps/bpsbridge"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -18,18 +19,20 @@ import (
 // fields are offsets from executor entry, while stage fields are durations.
 // Missing observations are omitted, rather than reported as measured zeros.
 type BPSObservation struct {
-	mu          sync.Mutex
-	now         func() time.Time
-	started     time.Time
-	stages      map[string]time.Duration
-	milestones  map[string]time.Duration
-	inputBytes  int
-	wireBytes   int
-	attempts    int
-	status      int
-	terminal    string
-	finishOnce  sync.Once
-	diagnostics log.Fields
+	mu              sync.Mutex
+	now             func() time.Time
+	started         time.Time
+	stages          map[string]time.Duration
+	milestones      map[string]time.Duration
+	inputBytes      int
+	wireBytes       int
+	attempts        int
+	status          int
+	terminal        string
+	finishOnce      sync.Once
+	diagnostics     log.Fields
+	failureUsage    usage.Detail
+	hasFailureUsage bool
 }
 
 func NewBPSObservation(inputBytes int) *BPSObservation {
@@ -219,6 +222,9 @@ func (o *BPSObservation) Finish(ctx context.Context, err error) {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				fields["outcome"] = "cancelled"
 			}
+		}
+		if fields["tool_recovery_attempts"] == 1 {
+			fields["tool_recovery_outcome"] = fields["outcome"]
 		}
 		LogWithRequestID(ctx).WithFields(fields).Info("BPS request timing")
 	})

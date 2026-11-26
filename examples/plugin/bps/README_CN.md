@@ -176,6 +176,37 @@ curl -X POST -H 'Authorization: Bearer YOUR_MANAGEMENT_KEY' \
   'http://127.0.0.1:8317/v8/management/credentials/verify'
 ```
 
+### 目录外原生工具的纠错续推
+
+已对照上游 bps-local-public 的
+[c66fb410](https://github.com/sunboyzoey/bps-local-public/tree/c66fb41006baf7ede70af69a3e2f81af6a6c246b)。
+保留上游已有的运输封装修复、目录内工具直呼和原生计划工具适配；
+上游对目录外原生工具仍直接报错，没有针对这种情况的纠错生成。
+
+CPA 增加两层处理：首先在历史末尾追加 developer 提醒，明确当前客户端工具目录，
+要求工具发现和执行使用既定的转发协议。若 BPS 仍在完整响应末尾返回唯一一个
+目录外原生函数调用，CPA 最多续推一次：保留真实调用，补入
+`client_tool_unavailable` 错误结果，明确说明工具没有执行，请模型重新选择。
+不会把未知工具猜测映射成客户端工具，也不会伪造成功结果。续推使用同一账号、模型、
+task 和 turn，生成新的运输请求 ID，在用户 payload 规则执行前递增 agent iteration。
+
+仅在完整响应、尚未交付工具时允许纠错。混合或多个工具调用、参数异常、首次响应含压缩、
+结构化输出、空客户端目录，以及 payload 规则修改 input 时均不启用。网络断流和上游错误
+不会触发纠错；第二次仍不合法则正常失败，不继续生成。纠错失败（包括续推连接被 HTTP
+拒绝）会阻止 CPA 外层换账号重试或重放原请求。握手阶段原有的重试预算另算。
+
+文本继续增量交付；纠错成功后保持同一个客户端响应 ID 和连续事件序号，拒绝重复输出或
+调用 ID。两次生成的已知 Token 用量合并上报，纠错失败也保留已收到的用量。
+每次生成都在全部内部处理完成后最后执行一次用户 payload 规则。纠错历史产生的压缩
+检查点不会被用于确认原始客户端历史。纠错会增加一次生成的延迟和用量，不能保证
+模型第二次一定选择正确工具。
+
+原有校验日志保留被拒绝的原生工具信息；最终 `BPS request timing` 日志增加
+`tool_recovery_attempts`、`tool_recovery_outcome`（`completed` / `failed` / `cancelled`），
+以及已构造纠错请求时的 `tool_recovery_upstream_bytes`。新增字段只含计数和固定状态，
+不记录提示词、参数、工具结果或凭据。实现位于 CPA 执行器和桥接层，单独替换授权
+动态库不会安装此修复。回归测试使用本地模拟 WebSocket 响应，不发起生产生成请求。
+
 ### 响应格式兼容修复（0.5.2）
 
 配套 CPA 同时兼容单行和带缩进的多行 WebSocket JSON。正文中的换行保持不变，

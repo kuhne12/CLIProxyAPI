@@ -53,6 +53,11 @@ func (e *BPSExecutor) Execute(ctx context.Context, auth *coreauth.Auth, req core
 	cacheCreationAsInput := helps.BPSCacheCreationAsInput(e.cfg)
 	reporter := helps.NewExecutorUsageReporter(ctx, e, req.Model, auth)
 	defer reporter.TrackFailure(ctx, &err)
+	defer func() {
+		if err != nil {
+			observation.PublishFailureUsage(ctx, reporter, err)
+		}
+	}()
 	body, prepared, errOpen := e.open(ctx, auth, req, opts, reporter, observation)
 	if errOpen != nil {
 		return resp, errOpen
@@ -65,6 +70,7 @@ func (e *BPSExecutor) Execute(ctx context.Context, auth *coreauth.Auth, req core
 	var terminal []byte
 	errRead := helps.ConsumeBPSEvents(body, func(data []byte) error {
 		helps.ObserveResponsesTokenEvent(reporter, data)
+		observation.ObserveFailureUsage(data)
 		if errEvent := bpsbridge.EventError(data); errEvent != nil {
 			return errEvent
 		}
@@ -75,10 +81,10 @@ func (e *BPSExecutor) Execute(ctx context.Context, auth *coreauth.Auth, req core
 		return nil
 	})
 	if errRead != nil {
-		return resp, errRead
+		return resp, observation.ToolRecoveryError(errRead)
 	}
 	if len(terminal) == 0 {
-		return resp, helps.BPSMissingTerminal()
+		return resp, observation.ToolRecoveryError(helps.BPSMissingTerminal())
 	}
 	reporter.ObserveResponseModel(terminal)
 	if detail, ok := helps.ParseCodexUsage(terminal); ok {
@@ -150,6 +156,7 @@ func (e *BPSExecutor) ExecuteStream(ctx context.Context, auth *coreauth.Auth, re
 		}
 		errRead := helps.ConsumeBPSEvents(body, func(data []byte) error {
 			helps.ObserveResponsesTokenEvent(reporter, data)
+			observation.ObserveFailureUsage(data)
 			if errEvent := bpsbridge.EventError(data); errEvent != nil {
 				return errEvent
 			}
@@ -180,8 +187,9 @@ func (e *BPSExecutor) ExecuteStream(ctx context.Context, auth *coreauth.Auth, re
 			errRead = helps.BPSMissingTerminal()
 		}
 		if errRead != nil {
+			errRead = observation.ToolRecoveryError(errRead)
 			errStream = errRead
-			reporter.PublishFailure(ctx, errRead)
+			observation.PublishFailureUsage(ctx, reporter, errRead)
 			_ = send(coreexecutor.StreamChunk{Err: errRead})
 		} else {
 			reporter.EnsurePublished(ctx)
@@ -307,7 +315,28 @@ func (e *BPSExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexe
 			}
 		}
 	}
-	transformed := bridge.Stream(socket)
+	var reopen bpsbridge.CorrectionOpener
+	if inputUnchanged {
+		reopen = func(correction bpsbridge.ToolCorrection) (io.ReadCloser, error) {
+			// Rebuild from the unconfigured business payload. Rules run once for
+			// this continuation, after all internal history and framing changes.
+			next := ojson.NewDoc(upstream)
+			if errCorrection := correction.Apply(next); errCorrection != nil {
+				return nil, errCorrection
+			}
+			bpsbridge.Frame(next)
+			correctionInput := next.Get("input").Raw
+			finalize.FinalizeDoc(next)
+			// Validation is read-only: never restore history removed by user rules.
+			if next.Get("input").Raw != correctionInput {
+				return nil, fmt.Errorf("BPS corrective history was changed by final payload rules")
+			}
+			nextPayload := next.Bytes()
+			observation.RecordToolRecoveryBytes(len(nextPayload))
+			return bpsbridge.Open(ctx, client, e.endpoint, token, nextPayload)
+		}
+	}
+	transformed := bridge.StreamWithToolRecovery(ctx, socket, reopen, observation.RecordToolRecovery, observation.ObserveFailureUsage)
 	stop := context.AfterFunc(ctx, func() { _ = transformed.Close() })
 	transferred = true
 	return &helps.BPSBody{ReadCloser: transformed, Release: func() { stop(); release() }}, payload, nil

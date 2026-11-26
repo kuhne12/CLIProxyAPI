@@ -206,6 +206,51 @@ requests and 64 queued requests per account. It never automatically replays a
 sent generation. Product context injected by the upstream can contribute roughly
 22k input tokens even for a short prompt; reported usage includes those tokens.
 
+### Recovering an unavailable native tool
+
+Reviewed upstream bps-local-public commit
+[c66fb410](https://github.com/sunboyzoey/bps-local-public/tree/c66fb41006baf7ede70af69a3e2f81af6a6c246b).
+Its transport-envelope recovery, direct calls to declared catalog tools, and
+native planning adapter remain in use. Upstream still rejects native tools
+outside that catalog; it has no corrective generation for that case.
+
+CPA adds two safeguards. A developer reminder after the history identifies the
+current external-client catalog as authoritative and directs tool discovery and
+execution through the documented relay. If BPS nevertheless completes a response
+ending in exactly one unavailable native function call, CPA can continue once
+with that actual call and an explicit `client_tool_unavailable` result saying
+that no tool was executed. It does not guess an equivalent client tool. The
+continuation uses the same account, model, task, and turn, a new transport request
+ID, and an incremented agent iteration before final user payload rules.
+
+Recovery is limited to fully completed responses before any tool handoff. It is
+disabled for mixed or multiple tool calls, malformed arguments, compaction in
+the first response, structured-output mode, an empty client catalog, or payload
+rules that change input. Network truncation and upstream errors do not trigger
+it. A second invalid response fails normally; no further corrective generation
+is opened. Corrective failures also stop outer credential rotation and request
+replay, including HTTP rejection of the corrective connection. Existing
+pre-generation handshake retries remain separate.
+
+Text remains incremental. Successful recovery preserves one client response ID
+and continuous event numbering, rejects reused output or call IDs, and reports
+the sum of both generations' known token usage. If correction fails, the failure
+usage record retains counters already received. Final user payload rules run
+once per generation, after internal changes. A checkpoint from corrective
+history is never used to certify the original client history. Recovery adds one
+generation's latency and usage and cannot guarantee that the model chooses a
+valid tool on its second attempt.
+
+The existing validation diagnostic records the rejected native tool. The final
+`BPS request timing` entry additionally includes `tool_recovery_attempts`,
+`tool_recovery_outcome` (`completed`, `failed`, or `cancelled`), and
+`tool_recovery_upstream_bytes` when a corrective payload was built. These fields
+contain counts and fixed status values; they do not contain prompts, arguments,
+tool results, or credentials. The implementation lives in the CPA executor and
+bridge; replacing only the authorization shared library does not install it.
+Regression tests use local simulated WebSocket responses, not production
+generations.
+
 ### WebSocket response framing (0.5.2)
 
 The matching CPA build accepts compact and pretty-printed WebSocket JSON frames.

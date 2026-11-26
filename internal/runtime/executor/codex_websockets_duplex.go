@@ -714,6 +714,7 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 						continue
 					}
 					steerDoc := ojson.NewDoc(steerReq.Payload)
+					helps.NormalizeBPSDelegationInputDoc(steerDoc, steerOpts)
 					helps.StripCodexSessionInstructionMarker(steerDoc, opts.SourceFormat)
 					if codexUseSIWCForRequest(ctx, auth, steerHeaders) {
 						thinking.StripConfigurationUpdatesDoc(steerDoc)

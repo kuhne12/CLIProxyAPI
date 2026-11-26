@@ -69,6 +69,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	}
 	originalTranslated = helps.SetStringIfDifferent(originalTranslated, "model", baseModel)
 	doc := ojson.NewDoc(body)
+	helps.NormalizeBPSDelegationInputDoc(doc, opts)
 	helps.RestoreCodexCheckpointTools(doc)
 	if shouldPreserveFullCodexOpenAIInclude(ctx, auth, baseURL, opts.Headers) {
 		originalTranslated = helps.PreserveCodexOpenAIResponsesInclude(originalTranslated, originalPayload, from)

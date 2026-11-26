@@ -31,6 +31,10 @@ type Bridge struct {
 	// OnInlineCompaction observes checkpoints in validated terminal output.
 	OnInlineCompaction func(id, encrypted string)
 	OnProtocolError    func(ProtocolDiagnostic)
+	// OnToolHandoff receives a complete client-facing output_item.done envelope
+	// after whole-response validation, before the first tool frame is written.
+	// This boundary does not acknowledge downstream delivery.
+	OnToolHandoff func([]byte)
 }
 
 func decode(raw []byte, target any) error {

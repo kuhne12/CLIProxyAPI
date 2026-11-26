@@ -148,6 +148,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	}
 	originalTranslated = helps.SetStringIfDifferent(originalTranslated, "model", baseModel)
 	doc := ojson.NewDoc(body)
+	helps.NormalizeBPSDelegationInputDoc(doc, opts)
 	helps.RestoreCodexCheckpointTools(doc)
 	if shouldPreserveFullCodexOpenAIInclude(ctx, auth, baseURL, opts.Headers) {
 		originalTranslated = helps.PreserveCodexOpenAIResponsesInclude(originalTranslated, originalPayload, from)
@@ -473,6 +474,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	originalTranslated = helps.SetStringIfDifferent(originalTranslated, "model", baseModel)
 
 	doc := ojson.NewDoc(body)
+	helps.NormalizeBPSDelegationInputDoc(doc, opts)
 	helps.RestoreCodexCheckpointTools(doc)
 	if err = helps.ApplyRequestThinkingDoc(doc, req, opts, from.String(), to.String(), e.Identifier(), updatesChanged); err != nil {
 		return resp, err

@@ -169,6 +169,8 @@ func EventError(data []byte) error {
 	code := detail.Get("code").String()
 	failure := &pluginabi.Error{Code: pluginabi.ErrorCodeRequestScoped, HTTPStatus: 400, Message: "Upstream rejected the generation request"}
 	switch code {
+	case "invalid_encrypted_content":
+		failure.Message = "Encrypted conversation content could not be validated; start a new delegation with valid history"
 	case "rate_limit_exceeded", "too_many_requests", "concurrent_request_limit":
 		failure.Code = pluginabi.ErrorCodeTransientRateLimit
 		failure.HTTPStatus = 429

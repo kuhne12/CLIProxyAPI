@@ -255,6 +255,7 @@ func (e *BPSExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexe
 	}
 	// Default rules must recognize the caller's restored fields as explicit.
 	original := doc.Bytes()
+	helps.NormalizeBPSDelegationInputDoc(doc, opts)
 	_ = doc.Set("model", nativeModel)
 	if errThinking := helps.ApplyBPSRequestThinkingDoc(doc, req, opts, from.String(), modelInfo, translated.ConfigurationUpdatesChanged); errThinking != nil {
 		return nil, nil, errThinking
@@ -287,6 +288,11 @@ func (e *BPSExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexe
 	inputUnchanged := ojson.GetBytesNoCopy(upstream, "input").Raw == ojson.GetBytesNoCopy(payload, "input").Raw
 	observation.SetRequestDiagnostic(scope, bridge.CatalogDiagnostic(), inputUnchanged)
 	bridge.OnProtocolError = func(d bpsbridge.ProtocolDiagnostic) { observation.ProtocolFailure(ctx, d) }
+	bridge.OnToolHandoff = func(data []byte) {
+		if ctx.Err() == nil {
+			helps.RememberBPSDelegationOutput(data, opts)
+		}
+	}
 	reporter.SetUpstreamModel(final.Get("model").String())
 	reporter.SetTranslatedReasoningEffort(payload, sdktranslator.FormatOpenAI.String())
 	if opts.ProxyURL != "" {

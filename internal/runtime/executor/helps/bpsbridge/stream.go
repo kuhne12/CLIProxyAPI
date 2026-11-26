@@ -69,6 +69,13 @@ func (b *Bridge) transform(reader io.Reader, writer io.Writer) error {
 			return nil
 		}
 		emitted[id] = true
+		if b.OnToolHandoff != nil {
+			raw, err := json.Marshal(object{"type": "response.output_item.done", "item": item})
+			if err != nil {
+				return err
+			}
+			b.OnToolHandoff(raw)
+		}
 		field, prefix := "arguments", "response.function_call_arguments"
 		if text(item["type"]) == "custom_tool_call" {
 			field, prefix = "input", "response.custom_tool_call_input"

@@ -573,8 +573,32 @@ type QuotaExceeded struct {
 	AntigravityCredits bool `yaml:"antigravity-credits" json:"antigravity-credits"`
 }
 
+// ProviderConcurrencyLimits caps model generations across a provider's credentials per CPA instance.
+// Zero leaves the provider uncapped.
+type ProviderConcurrencyLimits struct {
+	BPS   ProviderGenerationLimit `yaml:"bps,omitempty" json:"bps,omitempty"`
+	Codex ProviderGenerationLimit `yaml:"codex,omitempty" json:"codex,omitempty"`
+}
+
+// ProviderGenerationLimit accepts only whole, nonnegative YAML integers.
+type ProviderGenerationLimit uint64
+
+func (limit *ProviderGenerationLimit) UnmarshalYAML(node *yaml.Node) error {
+	if node.ShortTag() != "!!int" {
+		return fmt.Errorf("provider concurrency limit must be a non-negative integer")
+	}
+	var value uint64
+	if err := node.Decode(&value); err != nil {
+		return err
+	}
+	*limit = ProviderGenerationLimit(value)
+	return nil
+}
+
 // RoutingConfig configures how credentials are selected for requests.
 type RoutingConfig struct {
+	ProviderConcurrency ProviderConcurrencyLimits `yaml:"provider-concurrency,omitempty" json:"provider-concurrency,omitempty"`
+
 	// Strategy selects the credential selection strategy.
 	// Supported values: "round-robin" (default), "weighted-round-robin", "fill-first".
 	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`

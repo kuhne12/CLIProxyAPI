@@ -53,6 +53,118 @@ index 9b6daa3..4d0e196 100644
        {(showRefreshQuotaAction || resetQuotaAction) && (
          <div className={styles.quotaCardActions}>
            {resetQuotaAction}
+diff --git a/src/features/config/components/sections/SectionNetwork.tsx b/src/features/config/components/sections/SectionNetwork.tsx
+index 7a15acc..b534943 100644
+--- a/src/features/config/components/sections/SectionNetwork.tsx
++++ b/src/features/config/components/sections/SectionNetwork.tsx
+@@ -169,6 +169,30 @@ export function SectionNetwork({
+           disabled={disabled}
+           onChange={(saveCooldownStatus) => onChange({ saveCooldownStatus })}
+         />
++        <TextSetting
++          fieldId="bpsProviderConcurrency"
++          size="sm"
++          label={t('config_management.visual.additions.bpsProviderConcurrency.label')}
++          description={t('config_management.visual.additions.bpsProviderConcurrency.hint')}
++          placeholder="0"
++          type="number"
++          value={values.bpsProviderConcurrency}
++          onChange={(bpsProviderConcurrency) => onChange({ bpsProviderConcurrency })}
++          disabled={disabled}
++          error={getValidationMessage(t, validationErrors?.bpsProviderConcurrency)}
++        />
++        <TextSetting
++          fieldId="codexProviderConcurrency"
++          size="sm"
++          label={t('config_management.visual.additions.codexProviderConcurrency.label')}
++          description={t('config_management.visual.additions.codexProviderConcurrency.hint')}
++          placeholder="0"
++          type="number"
++          value={values.codexProviderConcurrency}
++          onChange={(codexProviderConcurrency) => onChange({ codexProviderConcurrency })}
++          disabled={disabled}
++          error={getValidationMessage(t, validationErrors?.codexProviderConcurrency)}
++        />
+         <TextSetting
+           fieldId="transientErrorCooldownSeconds"
+           size="sm"
+diff --git a/src/features/config/constants.ts b/src/features/config/constants.ts
+index 08c7ba2..b6ab48e 100644
+--- a/src/features/config/constants.ts
++++ b/src/features/config/constants.ts
+@@ -71,6 +71,8 @@ export const SECTION_VALIDATION_FIELDS: Record<VisualSectionId, readonly VisualC
+       'maxRetryCredentials',
+       'maxRetryInterval',
+       'authAutoRefreshWorkers',
++      'bpsProviderConcurrency',
++      'codexProviderConcurrency',
+       'transientErrorCooldownSeconds',
+       'videoResultAuthCacheTTL',
+     ],
+@@ -103,6 +105,8 @@ export const SECTION_VALIDATION_FIELDS: Record<VisualSectionId, readonly VisualC
+ export const FIELD_VALUE_KEYS: Record<string, readonly string[]> = {
+   routingSessionAffinitySubagents: ['routingSessionAffinitySubagents'],
+   saveCooldownStatus: ['saveCooldownStatus'],
++  bpsProviderConcurrency: ['bpsProviderConcurrency'],
++  codexProviderConcurrency: ['codexProviderConcurrency'],
+   transientErrorCooldownSeconds: ['transientErrorCooldownSeconds'],
+   videoResultAuthCacheTTL: ['videoResultAuthCacheTTL'],
+   claudeHeaderTimezone: ['claudeHeaderTimezone'],
+diff --git a/src/features/config/searchIndex.ts b/src/features/config/searchIndex.ts
+index 2bdcd43..97d4977 100644
+--- a/src/features/config/searchIndex.ts
++++ b/src/features/config/searchIndex.ts
+@@ -53,6 +53,20 @@ export const CONFIG_FIELD_SEARCH_INDEX: ConfigFieldSearchEntry[] = [
+     hintKey: L('additions.saveCooldownStatus.hint'),
+     yamlKeys: ['routing', 'cooldown', 'save-cooldown-status'],
+   },
++  {
++    fieldId: 'bpsProviderConcurrency',
++    sectionId: 'network',
++    labelKey: L('additions.bpsProviderConcurrency.label'),
++    hintKey: L('additions.bpsProviderConcurrency.hint'),
++    yamlKeys: ['routing', 'provider-concurrency', 'bps'],
++  },
++  {
++    fieldId: 'codexProviderConcurrency',
++    sectionId: 'network',
++    labelKey: L('additions.codexProviderConcurrency.label'),
++    hintKey: L('additions.codexProviderConcurrency.hint'),
++    yamlKeys: ['routing', 'provider-concurrency', 'codex'],
++  },
+   {
+     fieldId: 'transientErrorCooldownSeconds',
+     sectionId: 'network',
+diff --git a/src/features/config/visualConfigAdditions.ts b/src/features/config/visualConfigAdditions.ts
+index 6de0a1a..96509b0 100644
+--- a/src/features/config/visualConfigAdditions.ts
++++ b/src/features/config/visualConfigAdditions.ts
+@@ -21,6 +21,16 @@ export const ADDITION_FIELDS = [
+     path: 'routing.cooldown.save-cooldown-status'.split('.'),
+     kind: 'boolean',
+   },
++  {
++    key: 'bpsProviderConcurrency',
++    path: 'routing.provider-concurrency.bps'.split('.'),
++    kind: 'integer',
++  },
++  {
++    key: 'codexProviderConcurrency',
++    path: 'routing.provider-concurrency.codex'.split('.'),
++    kind: 'integer',
++  },
+   {
+     key: 'transientErrorCooldownSeconds',
+     path: 'routing.cooldown.transient-error-cooldown-seconds'.split('.'),
+@@ -295,6 +305,8 @@ export function validateVisualAdditions(
+   dirtyFields?: ReadonlySet<string>
+ ): VisualConfigValidationErrors {
+   const errors: VisualConfigValidationErrors = {
++    bpsProviderConcurrency: undefined,
++    codexProviderConcurrency: undefined,
+     transientErrorCooldownSeconds: undefined,
+     videoResultAuthCacheTTL: undefined,
+     claudeHeaderTimezone: undefined,
 diff --git a/src/features/quota/QuotaPage.tsx b/src/features/quota/QuotaPage.tsx
 index a459e9a..353df1a 100644
 --- a/src/features/quota/QuotaPage.tsx
@@ -819,7 +931,7 @@ index 38c290f..99a683a 100644
      };
    }
 diff --git a/src/i18n/locales/en.json b/src/i18n/locales/en.json
-index c732027..b573f3f 100644
+index c732027..c6d4466 100644
 --- a/src/i18n/locales/en.json
 +++ b/src/i18n/locales/en.json
 @@ -482,7 +482,27 @@
@@ -851,8 +963,23 @@ index c732027..b573f3f 100644
    },
    "claude_quota": {
      "title": "Claude Quota",
+@@ -1234,6 +1254,14 @@
+           "label": "Persist cooldown status",
+           "hint": "Save per-credential cooldown status in .cds files beside auth files. Disabled by default; otherwise status is kept only in memory."
+         },
++        "bpsProviderConcurrency": {
++          "label": "BPS concurrency limit",
++          "hint": "Shared by all BPS credentials on this server. Extra requests wait. Set 0 for no cap."
++        },
++        "codexProviderConcurrency": {
++          "label": "Codex concurrency limit",
++          "hint": "Shared by all Codex credentials on this server. Extra requests wait. Set 0 for no cap."
++        },
+         "transientErrorCooldownSeconds": {
+           "label": "Transient error cooldown (seconds)",
+           "hint": "Cooldown for upstream 408/500/502/503/504/520–526 errors. 0 uses the default 60 seconds; a negative value disables this cooldown."
 diff --git a/src/i18n/locales/ko.json b/src/i18n/locales/ko.json
-index 23ce80f..e61f4e3 100644
+index 23ce80f..e3a7306 100644
 --- a/src/i18n/locales/ko.json
 +++ b/src/i18n/locales/ko.json
 @@ -482,7 +482,27 @@
@@ -884,8 +1011,23 @@ index 23ce80f..e61f4e3 100644
    },
    "claude_quota": {
      "title": "Claude 할당량",
+@@ -1234,6 +1254,14 @@
+           "label": "쿨다운 상태 영속화",
+           "hint": "자격 증명별 쿨다운 상태를 인증 파일 옆의 .cds 파일에 저장합니다. 기본값은 비활성화이며, 비활성화 시 상태는 메모리에만 유지됩니다."
+         },
++        "bpsProviderConcurrency": {
++          "label": "BPS 동시 요청 한도",
++          "hint": "이 서버의 모든 BPS 계정이 공유합니다. 초과 요청은 대기하며 0은 무제한입니다."
++        },
++        "codexProviderConcurrency": {
++          "label": "Codex 동시 요청 한도",
++          "hint": "이 서버의 모든 Codex 계정이 공유합니다. 초과 요청은 대기하며 0은 무제한입니다."
++        },
+         "transientErrorCooldownSeconds": {
+           "label": "일시적 오류 쿨다운 (초)",
+           "hint": "업스트림 408/500/502/503/504/520–526 오류에 대한 쿨다운입니다. 0을 입력하면 기본값인 60초가 적용되며, 음수 값은 이 쿨다운을 비활성화합니다."
 diff --git a/src/i18n/locales/ru.json b/src/i18n/locales/ru.json
-index 8fd381c..cd3a97b 100644
+index 8fd381c..713f5bb 100644
 --- a/src/i18n/locales/ru.json
 +++ b/src/i18n/locales/ru.json
 @@ -656,7 +656,27 @@
@@ -917,8 +1059,23 @@ index 8fd381c..cd3a97b 100644
    },
    "kimi_quota": {
      "plan_label": "Тариф",
+@@ -1248,6 +1268,14 @@
+           "label": "Сохранять состояние охлаждения",
+           "hint": "Сохранять состояние охлаждения учётных данных в файлах .cds рядом с файлами авторизации. По умолчанию отключено: состояние хранится только в памяти."
+         },
++        "bpsProviderConcurrency": {
++          "label": "Лимит параллельных запросов BPS",
++          "hint": "Общий для всех учётных записей BPS на этом сервере. Лишние запросы ждут. 0 — без ограничения."
++        },
++        "codexProviderConcurrency": {
++          "label": "Лимит параллельных запросов Codex",
++          "hint": "Общий для всех учётных записей Codex на этом сервере. Лишние запросы ждут. 0 — без ограничения."
++        },
+         "transientErrorCooldownSeconds": {
+           "label": "Охлаждение при временных ошибках (секунды)",
+           "hint": "Для ошибок вышестоящего сервера 408/500/502/503/504/520–526. 0 означает стандартные 60 секунд; отрицательное значение отключает такое охлаждение."
 diff --git a/src/i18n/locales/tr.json b/src/i18n/locales/tr.json
-index 273d851..92d9955 100644
+index 273d851..2bc741b 100644
 --- a/src/i18n/locales/tr.json
 +++ b/src/i18n/locales/tr.json
 @@ -482,7 +482,27 @@
@@ -950,8 +1107,23 @@ index 273d851..92d9955 100644
    },
    "claude_quota": {
      "title": "Claude Kotası",
+@@ -1234,6 +1254,14 @@
+           "label": "Soğuma Durumunu Kalıcı Tut",
+           "hint": "Kimlik Bilgisi Başına Soğuma Durumunu Kimlik Dosyalarının Yanındaki .cds Dosyalarına Kaydet. Varsayılan Kapalı. Aksi Halde Durum Yalnızca Bellekte Tutulur."
+         },
++        "bpsProviderConcurrency": {
++          "label": "BPS eşzamanlı istek sınırı",
++          "hint": "Bu sunucudaki tüm BPS hesapları için ortaktır. Fazla istekler bekler. 0 sınırsızdır."
++        },
++        "codexProviderConcurrency": {
++          "label": "Codex eşzamanlı istek sınırı",
++          "hint": "Bu sunucudaki tüm Codex hesapları için ortaktır. Fazla istekler bekler. 0 sınırsızdır."
++        },
+         "transientErrorCooldownSeconds": {
+           "label": "Geçici Hata Soğuması (Saniye)",
+           "hint": "Yukarı Akış 408/500/502/503/504/520–526 Hataları için Soğuma. 0 Varsayılan 60 Saniyeyi Kullanır. Negatif Değer Bu Soğumayı Kapatır."
 diff --git a/src/i18n/locales/vi.json b/src/i18n/locales/vi.json
-index ecb555b..2adcff7 100644
+index ecb555b..ccc42c9 100644
 --- a/src/i18n/locales/vi.json
 +++ b/src/i18n/locales/vi.json
 @@ -482,7 +482,27 @@
@@ -983,8 +1155,23 @@ index ecb555b..2adcff7 100644
    },
    "claude_quota": {
      "title": "Quota Claude",
+@@ -1448,6 +1468,14 @@
+           "label": "Lưu trữ bền vững trạng thái cooldown",
+           "hint": "Lưu trạng thái cooldown của từng credential vào các file .cds cạnh file xác thực. Mặc định tắt; nếu tắt trạng thái chỉ được giữ trong bộ nhớ."
+         },
++        "bpsProviderConcurrency": {
++          "label": "Giới hạn đồng thời của BPS",
++          "hint": "Dùng chung cho mọi tài khoản BPS trên máy chủ này. Yêu cầu vượt mức sẽ chờ. Đặt 0 để không giới hạn."
++        },
++        "codexProviderConcurrency": {
++          "label": "Giới hạn đồng thời của Codex",
++          "hint": "Dùng chung cho mọi tài khoản Codex trên máy chủ này. Yêu cầu vượt mức sẽ chờ. Đặt 0 để không giới hạn."
++        },
+         "transientErrorCooldownSeconds": {
+           "label": "Thời gian cooldown lỗi tạm thời (giây)",
+           "hint": "Thời gian cooldown cho các lỗi 408/500/502/503/504/520–526 từ upstream. 0 sử dụng mặc định 60 giây; giá trị âm sẽ tắt cooldown này."
 diff --git a/src/i18n/locales/zh-CN.json b/src/i18n/locales/zh-CN.json
-index c8f773f..91c788d 100644
+index c8f773f..29bf790 100644
 --- a/src/i18n/locales/zh-CN.json
 +++ b/src/i18n/locales/zh-CN.json
 @@ -650,7 +650,27 @@
@@ -1016,8 +1203,23 @@ index c8f773f..91c788d 100644
    },
    "kimi_quota": {
      "plan_label": "套餐",
+@@ -1227,6 +1247,14 @@
+           "label": "持久化冷却状态",
+           "hint": "将各凭证的冷却状态保存到认证文件旁的 .cds 文件。默认关闭，关闭时仅在内存中保存状态。"
+         },
++        "bpsProviderConcurrency": {
++          "label": "BPS 总并发上限",
++          "hint": "此实例的所有 BPS 账号共用。达到上限后新请求排队，0 表示不限。"
++        },
++        "codexProviderConcurrency": {
++          "label": "Codex 总并发上限",
++          "hint": "此实例的所有 Codex 账号共用。达到上限后新请求排队，0 表示不限。"
++        },
+         "transientErrorCooldownSeconds": {
+           "label": "瞬时错误冷却时间（秒）",
+           "hint": "适用于上游 408/500/502/503/504/520–526 错误。0 使用默认的 60 秒冷却时间，负数禁用此类冷却。"
 diff --git a/src/i18n/locales/zh-TW.json b/src/i18n/locales/zh-TW.json
-index ad5ccab..ad54da7 100644
+index ad5ccab..faee5b0 100644
 --- a/src/i18n/locales/zh-TW.json
 +++ b/src/i18n/locales/zh-TW.json
 @@ -650,7 +650,27 @@
@@ -1049,6 +1251,21 @@ index ad5ccab..ad54da7 100644
    },
    "kimi_quota": {
      "plan_label": "方案",
+@@ -1227,6 +1247,14 @@
+           "label": "持久保存冷卻狀態",
+           "hint": "將各憑證的冷卻狀態儲存至驗證檔案旁的 .cds 檔案。預設關閉，關閉時僅在記憶體中保存狀態。"
+         },
++        "bpsProviderConcurrency": {
++          "label": "BPS 總並行上限",
++          "hint": "此執行個體的所有 BPS 帳號共用。達到上限後新請求會排隊，0 表示不限。"
++        },
++        "codexProviderConcurrency": {
++          "label": "Codex 總並行上限",
++          "hint": "此執行個體的所有 Codex 帳號共用。達到上限後新請求會排隊，0 表示不限。"
++        },
+         "transientErrorCooldownSeconds": {
+           "label": "暫時性錯誤冷卻時間（秒）",
+           "hint": "適用於上游 408/500/502/503/504/520–526 錯誤。0 使用預設的 60 秒冷卻時間，負數停用此類冷卻。"
 diff --git a/src/stores/useQuotaStore.ts b/src/stores/useQuotaStore.ts
 index 5a0ff66..844be82 100644
 --- a/src/stores/useQuotaStore.ts
@@ -1098,6 +1315,37 @@ index 7df6696..0265203 100644
    summary: PluginQuotaMetric[];
  }
  
+diff --git a/src/types/visualConfig.ts b/src/types/visualConfig.ts
+index 9e489cf..c02a166 100644
+--- a/src/types/visualConfig.ts
++++ b/src/types/visualConfig.ts
+@@ -22,6 +22,8 @@ export type VisualConfigFieldPath =
+   | 'oauthErrorRules'
+   | 'trustedProxies'
+   | 'discoveryServiceType'
++  | 'bpsProviderConcurrency'
++  | 'codexProviderConcurrency'
+   | 'transientErrorCooldownSeconds'
+   | 'videoResultAuthCacheTTL'
+   | 'claudeHeaderTimezone'
+@@ -156,6 +158,8 @@ export type VisualConfigValues = {
+ 
+   routingSessionAffinitySubagents: boolean;
+   saveCooldownStatus: boolean;
++  bpsProviderConcurrency: string;
++  codexProviderConcurrency: string;
+   transientErrorCooldownSeconds: string;
+   videoResultAuthCacheTTL: string;
+   claudeHeaderTimezone: string;
+@@ -266,6 +270,8 @@ export const DEFAULT_VISUAL_VALUES: VisualConfigValues = {
+ 
+   routingSessionAffinitySubagents: true,
+   saveCooldownStatus: false,
++  bpsProviderConcurrency: '',
++  codexProviderConcurrency: '',
+   transientErrorCooldownSeconds: '',
+   videoResultAuthCacheTTL: '',
+   claudeHeaderTimezone: '',
 diff --git a/tests/bpsQuota.test.ts b/tests/bpsQuota.test.ts
 new file mode 100644
 index 0000000..a305f6f
@@ -1589,3 +1837,29 @@ index 0000000..41ba5f8
 +    }
 +  );
 +});
+diff --git a/tests/configOAuthBehaviorUi.test.ts b/tests/configOAuthBehaviorUi.test.ts
+index c35d5a3..69c980f 100644
+--- a/tests/configOAuthBehaviorUi.test.ts
++++ b/tests/configOAuthBehaviorUi.test.ts
+@@ -35,7 +35,7 @@ describe('OAuth behavior configuration UI', () => {
+     const additions = CONFIG_FIELD_SEARCH_INDEX.filter((entry) =>
+       entry.labelKey.includes('.additions.')
+     );
+-    expect(additions).toHaveLength(27);
++    expect(additions).toHaveLength(29);
+     for (const entry of additions) {
+       const own = entry.sectionId === 'network' ? network : advanced;
+       const other = entry.sectionId === 'network' ? advanced : network;
+diff --git a/tests/visualConfigV8.test.ts b/tests/visualConfigV8.test.ts
+index 2323095..f12d444 100644
+--- a/tests/visualConfigV8.test.ts
++++ b/tests/visualConfigV8.test.ts
+@@ -268,6 +268,8 @@ describe('v8 scalar read/write path parity', () => {
+     'maxRetryCredentials',
+     'maxRetryInterval',
+     'authAutoRefreshWorkers',
++    'bpsProviderConcurrency',
++    'codexProviderConcurrency',
+     'transientErrorCooldownSeconds',
+     'antigravityConnectionPoolMaxIdleConnsPerHost',
+     'codexLiveMediaRelayMaxSessions',

@@ -1408,7 +1408,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			executionSeq := m.nextExecutionSeq()
 			startExec := time.Now()
 			var preRefreshExecErr error
-			resp, errExec := executor.Execute(execCtx, auth, execReq, execOpts)
+			resp, errExec := m.executeGeneration(executor, execCtx, auth, execReq, execOpts)
 			syncActiveAuth()
 			errExec = markUpstreamExecutionAttemptFromContext(execCtx, errExec)
 			durationExec := time.Since(startExec)
@@ -1428,7 +1428,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 					execCtx = syncMetadataSessionToContext(execCtx, execOpts.Metadata)
 					executionSeq = m.nextExecutionSeq()
 					startRetry := time.Now()
-					resp, errExec = executor.Execute(execCtx, auth, execReq, execOpts)
+					resp, errExec = m.executeGeneration(executor, execCtx, auth, execReq, execOpts)
 					syncActiveAuth()
 					errExec = markUpstreamExecutionAttemptFromContext(execCtx, errExec)
 					durationRetry := time.Since(startRetry)
@@ -4162,7 +4162,7 @@ func (m *Manager) VerifyInference(ctx context.Context, id, model string) (*Auth,
 
 	for {
 		activeVerifyAuth.Store(auth)
-		streamRes, errStream := executor.ExecuteStream(verifyRefreshCtx(execCtx), auth, req, opts)
+		streamRes, errStream := m.streamGeneration(executor, verifyRefreshCtx(execCtx), auth, req, opts)
 		syncVerifyAuth()
 		if errStream != nil {
 			if errors.Is(errStream, errVerifyCredentialRemoved) {
@@ -4181,7 +4181,7 @@ func (m *Manager) VerifyInference(ctx context.Context, id, model string) (*Auth,
 				opts.Stream = false
 				for {
 					activeVerifyAuth.Store(auth)
-					resp, errExec := executor.Execute(verifyRefreshCtx(execCtx), auth, req, opts)
+					resp, errExec := m.executeGeneration(executor, verifyRefreshCtx(execCtx), auth, req, opts)
 					syncVerifyAuth()
 					if errExec != nil {
 						if errors.Is(errExec, errVerifyCredentialRemoved) {

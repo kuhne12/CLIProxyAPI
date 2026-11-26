@@ -195,6 +195,8 @@ type resultPolicyHolder struct {
 
 // Manager orchestrates auth lifecycle, selection, execution, and persistence.
 type Manager struct {
+	bpsGenerations            providerGenerationGate
+	codexGenerations          providerGenerationGate
 	inFlightTracker           *inFlightTracker
 	store                     Store
 	cooldownStore             CooldownStateStore

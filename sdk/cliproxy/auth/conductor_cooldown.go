@@ -175,6 +175,8 @@ func (m *Manager) setConfigSnapshotLocked(cfg *internalconfig.Config) bool {
 		m.homeSessionAliases.clear()
 	}
 	m.runtimeConfig.Store(cfg)
+	m.bpsGenerations.setLimit(uint64(cfg.Routing.ProviderConcurrency.BPS))
+	m.codexGenerations.setLimit(uint64(cfg.Routing.ProviderConcurrency.Codex))
 	clearedCooldowns := m.clearDisabledCooldownStates(cfg)
 	if clearedCooldowns && oldCooldownStore != nil {
 		m.mu.Lock()

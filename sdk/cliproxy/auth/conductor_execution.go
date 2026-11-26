@@ -4162,9 +4162,12 @@ func (m *Manager) VerifyInference(ctx context.Context, id, model string) (*Auth,
 
 	for {
 		activeVerifyAuth.Store(auth)
-		streamRes, errStream := m.streamGeneration(executor, verifyRefreshCtx(execCtx), auth, req, opts)
+		streamRes, releaseSlot, errStream := m.streamGeneration(executor, verifyRefreshCtx(execCtx), auth, req, opts)
 		syncVerifyAuth()
 		if errStream != nil {
+			if streamRes != nil {
+				discardStreamChunks(streamRes.Chunks, releaseSlot)
+			}
 			if errors.Is(errStream, errVerifyCredentialRemoved) {
 				return nil, verifyCredentialRemovedError()
 			}
@@ -4262,11 +4265,14 @@ func (m *Manager) VerifyInference(ctx context.Context, id, model string) (*Auth,
 			for {
 				select {
 				case <-execCtx.Done():
-					discardStreamChunks(streamRes.Chunks)
+					discardStreamChunks(streamRes.Chunks, releaseSlot)
 					updated, _ := m.GetByID(auth.ID)
 					return updated, execCtx.Err()
 				case chunk, okChunk := <-streamRes.Chunks:
 					if !okChunk {
+						if releaseSlot != nil {
+							releaseSlot()
+						}
 						break streamDrain
 					}
 					if chunk.Err != nil && chunkErr == nil {

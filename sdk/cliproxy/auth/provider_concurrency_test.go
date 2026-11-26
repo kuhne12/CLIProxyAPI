@@ -11,16 +11,20 @@ import (
 )
 
 func TestProviderConcurrencyAcrossCredentialsAndReload(t *testing.T) {
+	manager := NewManager(nil, nil, nil)
+	const model = "provider-concurrency-model"
+	registerInFlightAuth(t, manager, "bps-first", "bps", model)
 	synctest.Test(t, func(t *testing.T) {
-		manager := NewManager(nil, nil, nil)
 		set := func(bps, codex config.ProviderGenerationLimit) {
 			manager.SetConfig(&config.Config{Routing: config.RoutingConfig{ProviderConcurrency: config.ProviderConcurrencyLimits{BPS: bps, Codex: codex}}})
 		}
 		set(1, 1)
-		streamExec := &inFlightStreamExecutor{id: "bps", chunks: make(chan cliproxyexecutor.StreamChunk)}
+		streamExec := &inFlightStreamExecutor{id: "bps", chunks: make(chan cliproxyexecutor.StreamChunk, 1)}
+		manager.RegisterExecutor(streamExec)
+		streamExec.chunks <- cliproxyexecutor.StreamChunk{Payload: []byte("data: first\n\n")}
 		streamCtx, cancelStream := context.WithCancel(t.Context())
-		req, opts := cliproxyexecutor.Request{}, cliproxyexecutor.Options{}
-		stream, err := manager.streamGeneration(streamExec, streamCtx, &Auth{ID: "bps-first"}, req, opts)
+		req, opts := cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{}
+		stream, err := manager.ExecuteStream(streamCtx, []string{"bps"}, req, opts)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -56,15 +60,20 @@ func TestProviderConcurrencyAcrossCredentialsAndReload(t *testing.T) {
 		}
 		run(t.Context(), blocked, "bps-third")
 		assertWaiting(blocked)
+		cancelStream()
+		assertWaiting(blocked)
 		set(2, 1)
 		<-blocked.entered
 		set(1, 1)
 		run(t.Context(), blocked, "bps-fourth")
-		cancelStream()
 		assertWaiting(blocked)
 		close(streamExec.chunks)
 		for range stream.Chunks {
 		}
+		assertWaiting(blocked)
+		set(2, 1)
+		<-blocked.entered
+		run(t.Context(), blocked, "bps-fifth")
 		assertWaiting(blocked)
 		set(0, 1)
 		<-blocked.entered

@@ -87,34 +87,21 @@ func (m *Manager) executeGeneration(executor ProviderExecutor, ctx context.Conte
 	return executor.Execute(ctx, auth, req, opts)
 }
 
-func (m *Manager) streamGeneration(executor ProviderExecutor, ctx context.Context, auth *Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
-	gate := m.generationGate(executor)
-	if gate == nil {
-		return executor.ExecuteStream(ctx, auth, req, opts)
-	}
-	release, err := gate.acquire(ctx)
-	if err != nil {
-		return nil, err
+// The stream consumer releases its slot after observing the original channel close.
+// Keeping that channel intact preserves the bootstrap ordering of ready chunks and cancellation.
+func (m *Manager) streamGeneration(executor ProviderExecutor, ctx context.Context, auth *Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, func(), error) {
+	var release func()
+	if gate := m.generationGate(executor); gate != nil {
+		var err error
+		release, err = gate.acquire(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	result, err := executor.ExecuteStream(ctx, auth, req, opts)
-	if err != nil || result == nil || result.Chunks == nil {
+	if release != nil && (result == nil || result.Chunks == nil) {
 		release()
-		return result, err
+		release = nil
 	}
-	out := make(chan cliproxyexecutor.StreamChunk)
-	go func() {
-		defer close(out)
-		defer release()
-		for chunk := range result.Chunks {
-			select {
-			case out <- chunk:
-			case <-ctx.Done():
-				// Keep the slot until upstream actually closes, even on cancellation.
-				for range result.Chunks {
-				}
-				return
-			}
-		}
-	}()
-	return &cliproxyexecutor.StreamResult{Headers: result.Headers, Chunks: out}, nil
+	return result, release, err
 }

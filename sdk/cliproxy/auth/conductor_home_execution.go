@@ -547,7 +547,7 @@ func wrapHomeStream(ctx context.Context, result *cliproxyexecutor.StreamResult, 
 		for {
 			select {
 			case <-done:
-				discardStreamChunks(result.Chunks)
+				discardStreamChunks(result.Chunks, nil)
 				return
 			case chunk, ok := <-result.Chunks:
 				if !ok {
@@ -558,7 +558,7 @@ func wrapHomeStream(ctx context.Context, result *cliproxyexecutor.StreamResult, 
 				}
 				select {
 				case <-done:
-					discardStreamChunks(result.Chunks)
+					discardStreamChunks(result.Chunks, nil)
 					return
 				case out <- chunk:
 				}

@@ -26,6 +26,7 @@ type credentialQuotaRequest struct {
 	AuthIndexPascal *string `json:"AuthIndex"`
 	PluginID        string  `json:"plugin_id"`
 	Provider        string  `json:"provider"`
+	ForceRefresh    bool    `json:"force_refresh"`
 }
 
 func (r credentialQuotaRequest) resolveAuthIndex() string {
@@ -246,11 +247,20 @@ func (h *Handler) GetPluginQuota(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "auth_index is required"})
 		return
 	}
-	h.fetchQuotaForPlugin(c, pluginID, authIndex)
+	h.fetchQuotaForPlugin(c, pluginID, authIndex, false)
 }
 
 // FetchPluginQuota handles POST /v0/management/plugins/:id/quota
 func (h *Handler) FetchPluginQuota(c *gin.Context) {
+	h.fetchPluginQuota(c, false)
+}
+
+// FetchPluginQuotaV8 retrieves quota with optional cache bypass for BPS.
+func (h *Handler) FetchPluginQuotaV8(c *gin.Context) {
+	h.fetchPluginQuota(c, true)
+}
+
+func (h *Handler) fetchPluginQuota(c *gin.Context, allowForceRefresh bool) {
 	pluginID := strings.TrimSpace(c.Param("id"))
 	var body credentialQuotaRequest
 	if errBind := c.ShouldBindJSON(&body); errBind != nil {
@@ -262,10 +272,10 @@ func (h *Handler) FetchPluginQuota(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "auth_index is required"})
 		return
 	}
-	h.fetchQuotaForPlugin(c, pluginID, authIndex)
+	h.fetchQuotaForPlugin(c, pluginID, authIndex, allowForceRefresh && pluginID == "bps" && body.ForceRefresh)
 }
 
-func (h *Handler) fetchQuotaForPlugin(c *gin.Context, pluginID, authIndex string) {
+func (h *Handler) fetchQuotaForPlugin(c *gin.Context, pluginID, authIndex string, forceRefresh bool) {
 	auth := h.authByIndex(authIndex)
 	if auth == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "auth not found"})
@@ -282,11 +292,12 @@ func (h *Handler) fetchQuotaForPlugin(c *gin.Context, pluginID, authIndex string
 	}
 
 	quotaResp, handled, errFetch := host.FetchQuotaByPlugin(c.Request.Context(), pluginID, pluginapi.QuotaFetchRequest{
-		AuthIndex:  auth.Index,
-		AuthID:     auth.ID,
-		Provider:   auth.Provider,
-		Metadata:   auth.Metadata,
-		Attributes: auth.Attributes,
+		AuthIndex:    auth.Index,
+		AuthID:       auth.ID,
+		Provider:     auth.Provider,
+		Metadata:     auth.Metadata,
+		Attributes:   auth.Attributes,
+		ForceRefresh: forceRefresh,
 	})
 	if !handled {
 		c.JSON(http.StatusNotFound, gin.H{"error": "quota provider not found for plugin"})

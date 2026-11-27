@@ -318,6 +318,50 @@ index 672d63d..60ba0b9 100644
                  </div>
                );
              })}
+diff --git a/src/features/quota/providers/plugin/data.ts b/src/features/quota/providers/plugin/data.ts
+index 5057386..2ab376a 100644
+--- a/src/features/quota/providers/plugin/data.ts
++++ b/src/features/quota/providers/plugin/data.ts
+@@ -131,7 +131,8 @@ export const resetPluginQuotaRouteCache = () => {
+ 
+ export const fetchPluginQuota = async (
+   file: AuthFileItem,
+-  t: TFunction
++  t: TFunction,
++  forceRefresh = false
+ ): Promise<PluginQuotaData> => {
+   const authIndex = normalizeAuthIndex(file.authIndex ?? file['auth_index']);
+   if (!authIndex) throw new Error(t('plugin_quota.missing_auth_index'));
+@@ -149,7 +150,10 @@ export const fetchPluginQuota = async (
+ 
+   const payload = await apiClient.post<PluginQuotaPayload>(
+     `/plugins/${encodeURIComponent(pluginId)}/quota`,
+-    { auth_index: authIndex }
++    {
++      auth_index: authIndex,
++      ...(pluginId === 'bps' && forceRefresh ? { force_refresh: true } : {}),
++    }
+   );
+   const summary = normalizePluginQuotaSummary(payload.summary);
+   return {
+@@ -183,7 +187,7 @@ export const resetBpsQuota = async (file: AuthFileItem, t: TFunction): Promise<P
+   }
+   try {
+     // The v8 reset endpoint clears routing cooldown only after upstream confirmation.
+-    const data = await fetchPluginQuota(file, t);
++    const data = await fetchPluginQuota(file, t, true);
+     assertConnection();
+     return data;
+   } catch {
+@@ -195,7 +199,7 @@ export const PLUGIN_CONFIG: QuotaProviderData<PluginQuotaState, PluginQuotaData>
+   type: 'plugin',
+   i18nPrefix: 'plugin_quota',
+   filterFn: (file) => isPluginQuotaFile(file) && !isDisabledAuthFile(file),
+-  fetchQuota: fetchPluginQuota,
++  fetchQuota: (file, t) => fetchPluginQuota(file, t, true),
+   resetQuota: resetBpsQuota,
+   canResetQuota: (quota) =>
+     quota.pluginId === 'bps' &&
 diff --git a/src/features/routing/RoutingPage.tsx b/src/features/routing/RoutingPage.tsx
 index 1f60693..10e24ee 100644
 --- a/src/features/routing/RoutingPage.tsx
@@ -414,6 +458,22 @@ index af85b4c..f4d6c83 100644
 +    expect(markup).toContain('$40.00');
    });
  });
+diff --git a/tests/bpsQuotaReset.test.ts b/tests/bpsQuotaReset.test.ts
+index f7199ab..19c4808 100644
+--- a/tests/bpsQuotaReset.test.ts
++++ b/tests/bpsQuotaReset.test.ts
+@@ -47,7 +47,10 @@ describe('BPS quota reset', () => {
+     expect(reset).toHaveBeenCalledWith('/plugins/bps/quota', {
+       params: { auth_index: 'fixture-index' },
+     });
+-    expect(read).toHaveBeenCalledWith('/plugins/bps/quota', { auth_index: 'fixture-index' });
++    expect(read).toHaveBeenCalledWith('/plugins/bps/quota', {
++      auth_index: 'fixture-index',
++      force_refresh: true,
++    });
+     expect(result.pluginId).toBe('bps');
+   });
+ 
 diff --git a/tests/quotaBalanceDetails.test.ts b/tests/quotaBalanceDetails.test.ts
 index f633053..8d0ca50 100644
 --- a/tests/quotaBalanceDetails.test.ts

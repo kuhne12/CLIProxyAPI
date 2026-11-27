@@ -208,7 +208,7 @@ func (e *BPSExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexe
 	if token == "" || account == "" {
 		return nil, nil, &pluginabi.Error{Code: "bps_auth_required", HTTPStatus: 401, Message: "Upstream credential is missing its access token or account ID"}
 	}
-	ctx = bpsbridge.WithObserver(ctx, observation.ObserverWithErrorLogging(ctx, token))
+	ctx = bpsbridge.WithObserver(ctx, observation.ObserverWithUsageErrorLogging(ctx, reporter, token))
 	subject, _ := auth.Metadata["sub"].(string)
 	queueDone := observation.Stage("queue")
 	options, release, errSlot := bpsSlots.Acquire(ctx, account+"\x00"+subject)

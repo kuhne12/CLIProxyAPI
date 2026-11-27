@@ -207,6 +207,18 @@ func TestBPSExecutorToolRecovery(t *testing.T) {
 					if record.Detail.InputTokens != wantInput || record.Failed == wantSuccess {
 						t.Fatalf("incorrect accounting: failed=%t input=%d want=%d", record.Failed, record.Detail.InputTokens, wantInput)
 					}
+					if mode == "upstream_error" || mode == "upstream_rate_limited" {
+						wantCode := "server_error"
+						if mode == "upstream_rate_limited" {
+							wantCode = "rate_limit_exceeded"
+						}
+						if ojson.Get(record.Fail.Body, "diagnostic_source").String() != "bps_upstream" || ojson.Get(record.Fail.Body, "error.code").String() != wantCode || record.Fail.Code != usage.FailureStreamTruncatedCode {
+							t.Fatalf("correction lost private diagnostic or changed classification: %+v", record.Fail)
+						}
+					}
+					if wantSuccess && record.Fail.Body != "" {
+						t.Fatal("successful correction retained a failure diagnostic")
+					}
 					wantWrite := int64(6)
 					if wantInput == 10 {
 						wantWrite = 3

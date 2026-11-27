@@ -77,6 +77,9 @@ type UsageReporter struct {
 	// upstreamModel holds the canonical upstream model expected to be served when
 	// it differs from the requested model (e.g. local Kimi model mappings).
 	upstreamModel string
+
+	failureDiagnosticMu sync.RWMutex
+	failureDiagnostic   usageFailureDiagnostic
 }
 
 type usageExecutor interface {
@@ -690,6 +693,7 @@ func (r *UsageReporter) publishAttemptRecord(ctx context.Context, record usage.R
 func (r *UsageReporter) publishRecord(ctx context.Context, record usage.Record) {
 	record.ResponseHeaders = internallogging.GetResponseHeaders(ctx)
 	if r != nil {
+		r.applyFailureDiagnostic(&record)
 		ctx = usage.WithCapturedIdentity(ctx, r.apiKey, r.accessProvider, r.isNativeKey)
 	}
 	usage.PublishRecord(ctx, record)

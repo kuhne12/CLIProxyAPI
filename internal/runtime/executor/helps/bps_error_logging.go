@@ -16,6 +16,12 @@ import (
 // error mapper can replace them. It also covers corrective generations because
 // their transport inherits the same observer. Event bytes are never modified.
 func (o *BPSObservation) ObserverWithErrorLogging(ctx context.Context, secrets ...string) bpsbridge.Observer {
+	return o.ObserverWithUsageErrorLogging(ctx, nil, secrets...)
+}
+
+// ObserverWithUsageErrorLogging additionally retains a bounded, allowlisted
+// diagnostic on this attempt's usage reporter without changing public errors.
+func (o *BPSObservation) ObserverWithUsageErrorLogging(ctx context.Context, reporter *UsageReporter, secrets ...string) bpsbridge.Observer {
 	observer := o.Observer()
 	observer.Event = func(data []byte) {
 		o.observeUpstream(data)
@@ -24,6 +30,10 @@ func (o *BPSObservation) ObserverWithErrorLogging(ctx context.Context, secrets .
 			return
 		}
 		payload, redacted := redactBPSErrorEvent(data, secrets)
+		if reporter != nil {
+			body, headers := bpsUsageFailureDiagnostic(payload)
+			reporter.SetFailureDiagnostic(body, headers)
+		}
 		detail := ojson.GetBytes(payload, "error")
 		if !detail.IsObject() {
 			detail = ojson.GetBytes(payload, "response.error")

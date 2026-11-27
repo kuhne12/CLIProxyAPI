@@ -1,0 +1,251 @@
+diff --git a/web/src/components/Dashboard.tsx b/web/src/components/Dashboard.tsx
+index b144379..afad02f 100644
+--- a/web/src/components/Dashboard.tsx
++++ b/web/src/components/Dashboard.tsx
+@@ -1,3 +1,4 @@
++import { credentialDirectory, type CredentialIdentity } from "@/lib/credential-email";
+ import { keepPreviousData, useQuery } from "@tanstack/react-query";
+ import { AlertTriangle, ChartColumn, KeyRound, RefreshCw } from "lucide-react";
+ import { useEffect, useState } from "react";
+@@ -87,6 +88,21 @@ export function Dashboard() {
+     },
+   });
+ 
++  const directory = useQuery({
++    queryKey: ["credential-email", keyFingerprint(key)],
++    enabled: Boolean(key) && tab === "records" && query.isSuccess && !query.isPlaceholderData,
++    retry: false,
++    staleTime: 60_000,
++    queryFn: async ({ signal }) => {
++      const response = await fetch("/v8/management/observability/credentials/concurrency", {
++        signal, headers: { Authorization: "Bearer " + key }, mode: "same-origin", redirect: "error",
++      });
++      if (!response.ok) throw new Error("Credential directory unavailable");
++      const payload = (await response.json()) as { credentials: CredentialIdentity[] };
++      return credentialDirectory(payload.credentials);
++    },
++  });
++
+   const { refetch, isPending, isFetching } = query;
+   const loading = isPending || isFetching;
+ 
+@@ -268,6 +284,7 @@ export function Dashboard() {
+ 
+         <TabsContent value="records">
+           <RecordsTab
++            directory={directory.data}
+             data={records}
+             loading={loading}
+             options={options}
+diff --git a/web/src/components/RecordMetrics.tsx b/web/src/components/RecordMetrics.tsx
+index 49dfb86..24b4ae4 100644
+--- a/web/src/components/RecordMetrics.tsx
++++ b/web/src/components/RecordMetrics.tsx
+@@ -3,7 +3,7 @@ import { useState } from "react";
+ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+ import { useFormat } from "@/hooks/use-format";
+ import { useI18n } from "@/i18n/context";
+-import { latencyTone, recordThroughput, speedTone, toneTextClass } from "@/lib/metrics";
++import { latencyHealth } from "@/lib/latency-health";
+ import { tokenAccounting } from "@/lib/token-accounting";
+ import { copyToClipboard, formatDuration } from "@/lib/utils";
+ import type { StoredRecord } from "@/types";
+@@ -94,31 +94,34 @@ export function TokenCell({ record }: { record: StoredRecord }) {
+ }
+ 
+ const toneColor = {
+-  success: "var(--success)",
+-  warning: "var(--warning)",
+-  danger: "var(--destructive)",
+-  muted: "var(--muted-foreground)",
++  good: "var(--color-emerald-500)", warn: "var(--color-amber-400)",
++  slow: "var(--color-orange-500)", critical: "var(--color-red-500)",
++};
++const toneText = {
++  good: "text-emerald-600 dark:text-emerald-400", warn: "text-amber-600 dark:text-amber-400",
++  slow: "text-orange-600 dark:text-orange-400", critical: "text-red-600 dark:text-red-400",
+ };
+ 
+ export function LatencyCell({ record }: { record: StoredRecord }) {
+   const { t } = useI18n();
+-  const throughput = recordThroughput(record);
+   const hasTTFT = record.stream && Number.isFinite(record.ttft_ms) && record.ttft_ms > 0;
++  const health = latencyHealth(hasTTFT ? record.ttft_ms : null, record.latency_ms, record.output_tokens);
++  const throughput = health.tps;
+   const rows = [
+     {
+       label: t("records.row.first_token"),
+       value: hasTTFT ? formatDuration(record.ttft_ms) : "-",
+-      tone: hasTTFT ? latencyTone(record.ttft_ms) : ("muted" as const),
++      tone: health.first,
+     },
+     {
+       label: t("records.row.total_duration"),
+       value: record.latency_ms > 0 ? formatDuration(record.latency_ms) : "-",
+-      tone: latencyTone(record.latency_ms),
++      tone: health.total,
+     },
+     {
+       label: "TPS",
+       value: throughput === null ? "-" : t("records.row.throughput", { value: throughput.toFixed(1) }),
+-      tone: speedTone(throughput),
++      tone: health.rate,
+     },
+   ];
+   return (
+@@ -130,14 +133,14 @@ export function LatencyCell({ record }: { record: StoredRecord }) {
+         aria-hidden
+         className="w-[3px] shrink-0 rounded-full"
+         style={{
+-          background: `linear-gradient(to bottom, ${toneColor[rows[0].tone]} 20%, ${toneColor[rows[1].tone]} 50%, ${toneColor[rows[2].tone]} 80%)`,
++          background: `linear-gradient(to bottom, ${toneColor[rows[0].tone]} 30%, ${toneColor[rows[1].tone]} 50%, ${toneColor[rows[2].tone]} 70%)`,
+         }}
+       />
+       <div className="grid grid-cols-[auto_auto] gap-x-3">
+         {rows.map(({ label, value, tone }) => (
+           <div key={label} className="col-span-2 grid grid-cols-subgrid">
+             <span className="text-muted-foreground">{label}</span>
+-            <span className={`text-right font-mono tabular-nums ${toneTextClass(tone)}`}>{value}</span>
++            <span className={`text-right font-mono tabular-nums ${value === "-" ? "text-muted-foreground" : toneText[tone]}`}>{value}</span>
+           </div>
+         ))}
+       </div>
+diff --git a/web/src/components/RecordsTab.tsx b/web/src/components/RecordsTab.tsx
+index 538e4fc..544e86f 100644
+--- a/web/src/components/RecordsTab.tsx
++++ b/web/src/components/RecordsTab.tsx
+@@ -1,3 +1,4 @@
++import { credentialEmail, type credentialDirectory } from "@/lib/credential-email";
+ import { AlertCircle, Check, CheckCircle2, Copy, Info, Layers, RotateCcw, Search } from "lucide-react";
+ import { useEffect, useState } from "react";
+ import { FailureDetails } from "@/components/FailureDetails";
+@@ -30,6 +31,7 @@ import { cn, copyToClipboard, maskApiKey } from "@/lib/utils";
+ import type { OptionsResponse, RecordListResponse, RecordsFilters, StoredRecord } from "@/types";
+ 
+ interface RecordsTabProps {
++  directory?: ReturnType<typeof credentialDirectory>;
+   data: RecordListResponse | null;
+   loading: boolean;
+   options: OptionsResponse;
+@@ -368,6 +370,7 @@ function CompactItem({ label, value, badge }: { label: string; value: string; ba
+ }
+ 
+ export function RecordsTab({
++  directory,
+   data,
+   loading,
+   options,
+@@ -566,6 +569,7 @@ export function RecordsTab({
+                     return (
+                       <RecordRows
+                         key={record.id}
++                        email={credentialEmail(record, directory)}
+                         record={record}
+                         cost={cost}
+                         expanded={expanded}
+@@ -676,11 +680,13 @@ export function RecordsTab({
+ }
+ 
+ function RecordRows({
++  email,
+   record,
+   cost,
+   expanded,
+   onToggle,
+ }: {
++  email: string;
+   record: StoredRecord;
+   cost: RecordCost | null;
+   expanded: boolean;
+@@ -758,11 +764,9 @@ function RecordRows({
+         </TableCell>
+         <TableCell className="py-3">
+           <IdentityCell
+-            value={record.auth_id || record.auth_index}
++            value={email}
+             label={t("records.th.credential")}
+-            secondary={[record.auth_type, record.auth_id && record.auth_index ? `#${record.auth_index}` : ""]
+-              .filter(Boolean)
+-              .join(" · ")}
++            secondary={record.auth_type}
+           />
+         </TableCell>
+         <TableCell className="py-3">
+diff --git a/web/src/lib/credential-email.ts b/web/src/lib/credential-email.ts
+new file mode 100644
+index 0000000..f21fe60
+--- /dev/null
++++ b/web/src/lib/credential-email.ts
+@@ -0,0 +1,23 @@
++export interface CredentialIdentity { id: string; auth_index: string; email?: string }
++
++function email(value?: string) {
++  const candidate = value?.trim() || "";
++  return /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(candidate) ? candidate : "";
++}
++
++export function credentialDirectory(rows: CredentialIdentity[]) {
++  const byIndex = new Map<string, string>();
++  const byId = new Map<string, string>();
++  for (const row of rows) {
++    const address = email(row.email);
++    if (!address) continue;
++    if (row.auth_index) byIndex.set(row.auth_index, address);
++    if (row.id) byId.set(row.id, address);
++  }
++  return { byIndex, byId };
++}
++
++export function credentialEmail(record: { auth_type: string; source: string; auth_index: string; auth_id: string }, directory?: ReturnType<typeof credentialDirectory>) {
++  const recorded = record.auth_type === "oauth" ? email(record.source) : "";
++  return recorded || directory?.byIndex.get(record.auth_index) || directory?.byId.get(record.auth_id) || "";
++}
+diff --git a/web/src/lib/latency-health.ts b/web/src/lib/latency-health.ts
+new file mode 100644
+index 0000000..d61ce51
+--- /dev/null
++++ b/web/src/lib/latency-health.ts
+@@ -0,0 +1,20 @@
++export type Severity = 'good' | 'warn' | 'slow' | 'critical';
++
++function grade(value: number, warn: number, slow: number, critical: number): Severity {
++  if (value >= critical) return 'critical';
++  if (value >= slow) return 'slow';
++  if (value >= warn) return 'warn';
++  return 'good';
++}
++
++export function latencyHealth(firstMs: number | null, totalMs: number, output: number) {
++  const total = grade(totalMs, 60000, 180000, 300000);
++  const hasRate = Number.isFinite(output) && output > 0 && Number.isFinite(totalMs) && totalMs > 0;
++  // sub2api uses wall time, with a fixed allowance plus time per output token.
++  return {
++    first: firstMs === null ? total : grade(firstMs, 10000, 30000, 60000),
++    total,
++    rate: hasRate ? grade(totalMs, 10000 + output * 50, 30000 + output * 100, 60000 + output * 200) : total,
++    tps: hasRate ? output * 1000 / totalMs : null,
++  };
++}
+diff --git a/web/tests/credential-latency.test.mjs b/web/tests/credential-latency.test.mjs
+new file mode 100644
+index 0000000..b597f12
+--- /dev/null
++++ b/web/tests/credential-latency.test.mjs
+@@ -0,0 +1,17 @@
++import assert from 'node:assert/strict';
++import test from 'node:test';
++import { latencyHealth } from '../src/lib/latency-health.ts';
++import { credentialDirectory, credentialEmail } from '../src/lib/credential-email.ts';
++
++test('sub2api thresholds include their boundaries and missing segments inherit duration', () => {
++ for (const [ms,grade] of [[9999,'good'],[10000,'warn'],[30000,'slow'],[60000,'critical']]) assert.equal(latencyHealth(ms,2000,0).first,grade);
++ for (const [ms,grade] of [[59999,'good'],[60000,'warn'],[180000,'slow'],[300000,'critical']]) assert.deepEqual(latencyHealth(null,ms,0),{first:grade,total:grade,rate:grade,tps:null});
++ for (const [ms,grade] of [[14999,'good'],[15000,'warn'],[40000,'slow'],[80000,'critical']]) assert.equal(latencyHealth(null,ms,100).rate,grade);
++});
++test('historical email wins and unknown API-key material stays out of the credential cell', () => {
++ const dir=credentialDirectory([{id:'a',auth_index:'i',email:'current@example.test'}]);
++ const row={auth_type:'oauth',auth_id:'a',auth_index:'i',source:'old@example.test'};
++ assert.equal(credentialEmail(row,dir),'old@example.test');
++ assert.equal(credentialEmail({...row,source:''},dir),'current@example.test');
++ assert.equal(credentialEmail({...row,auth_type:'api_key',source:'private@example.test',auth_id:'',auth_index:''},dir),'');
++});

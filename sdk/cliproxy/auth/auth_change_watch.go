@@ -37,6 +37,9 @@ func (m *Manager) WatchAuthChanges(authID string) (<-chan struct{}, func()) {
 
 // Caller holds m.mu. No user callback or blocking work runs under the manager lock.
 func (m *Manager) notifyAuthChangeLocked(authID string) {
+	if m.generations.waiting[authID] > 0 {
+		m.generations.notifyLocked()
+	}
 	for changes := range m.authChangeWatchers[authID] {
 		select {
 		case changes <- struct{}{}:

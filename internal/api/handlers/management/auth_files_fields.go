@@ -328,6 +328,18 @@ func (h *Handler) PatchAuthFileFields(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "auth file not found"})
 		return
 	}
+	if strings.HasPrefix(c.FullPath(), "/v8/") {
+		for key, raw := range req {
+			if rootAuthFileField(key) != "max_concurrency" {
+				continue
+			}
+			var limit *int32
+			if key != "max_concurrency" || json.Unmarshal(raw, &limit) != nil || (limit != nil && (*limit < 1 || (targetAuth.Provider == "bps" && *limit > coreauth.BPSAccountSlots))) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "max_concurrency must be a positive integer or null (BPS maximum 4)"})
+				return
+			}
+		}
+	}
 	if coreauth.IsPluginVirtualAuth(targetAuth) {
 		c.JSON(http.StatusConflict, gin.H{"error": errPluginVirtualAuth.Error()})
 		return

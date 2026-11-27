@@ -79,3 +79,68 @@ func TestProviderConcurrencyAcrossCredentialsAndReload(t *testing.T) {
 		<-blocked.entered
 	})
 }
+
+func TestCredentialConcurrencyReloadAndIsolation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := NewManager(nil, nil, nil)
+		auth := &Auth{ID: "file-a", Provider: "bps", Metadata: map[string]any{"max_concurrency": 1, "email": "a@example.test"}}
+		m.auths[auth.ID] = auth.Clone()
+		acquire := func(a *Auth) func() {
+			t.Helper()
+			release, err := m.acquireGeneration(t.Context(), "bps", a)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return release
+		}
+		first := acquire(auth)
+		other := acquire(&Auth{ID: "file-b", Provider: "bps"})
+		other()
+		change := func(n int) {
+			m.mu.Lock()
+			m.auths[auth.ID].Metadata["max_concurrency"] = n
+			m.notifyAuthChangeLocked(auth.ID)
+			m.mu.Unlock()
+		}
+		pending := make(chan func(), 1)
+		go func() {
+			release, err := m.acquireGeneration(t.Context(), "bps", auth)
+			if err == nil {
+				pending <- release
+			}
+		}()
+		synctest.Wait()
+		select {
+		case <-pending:
+			t.Fatal("credential cap exceeded")
+		default:
+		}
+		row := m.CredentialConcurrency()[0]
+		if row.Current != 1 || row.Limit != 1 || row.Email != "a@example.test" {
+			t.Fatalf("unexpected snapshot: %+v", row)
+		}
+		change(2)
+		second := <-pending
+		change(1)
+		if row = m.CredentialConcurrency()[0]; row.Current != 2 || row.Limit != 1 {
+			t.Fatalf("reduction interrupted a request: %+v", row)
+		}
+		cancelled, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() { _, err := m.acquireGeneration(cancelled, "bps", auth); done <- err }()
+		synctest.Wait()
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+		second()
+		first()
+		first()
+		if row = m.CredentialConcurrency()[0]; row.Current != 0 {
+			t.Fatalf("leaked slot: %+v", row)
+		}
+		if len(m.generations.active)+len(m.generations.waiting)+len(m.generations.providers) != 0 {
+			t.Fatal("leaked counters")
+		}
+	})
+}

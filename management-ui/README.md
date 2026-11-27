@@ -1,7 +1,7 @@
 # Customized BPS management panel
 
 `build.sh` fetches the management frontend at `upstream-revision`, applies
-`bps-quota.patch` and `bps-quota-style.patch` in order, installs its locked
+`bps-quota.patch` and `bps-quota-style.patch` and the credential concurrency patch in order, installs its locked
 dependencies with Bun 1.4.3, and runs the
 frontend tests, lint, and production build. The result is one self-contained HTML
 file. CI passes this exact artifact and its SHA256 to the deployment script.
@@ -31,3 +31,14 @@ checks cover the shared disclosure, refresh, dark/light themes, and mobile layou
 The production image includes the panel. Deployment sets the v8 setting
 `management.disable-auto-update-panel` to preserve the customized build. The
 previous image and configuration remain available in the deployment backup.
+
+The credential panel polls one authenticated v8 snapshot every five seconds while
+visible. Counts cover admitted generation attempts on this CPA instance, including
+open streams. An empty file override inherits the default (four for BPS and
+unlimited for other providers). Channel-wide and upstream account limits also apply.
+
+The separately deployed usage dashboard uses the installed cpa-usage-stats
+0.10.2-custom.3 source as its baseline. Apply usage-stats-custom.4.patch to that
+source, run the web tests and build, and build the shared library with version
+0.10.2-custom.4. The patch includes the credential email lookup and sub2api
+latency thresholds.

@@ -124,27 +124,27 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 	if errConfigure != nil {
 		t.Fatal(errConfigure)
 	}
-	reset := time.Now().Add(24 * time.Hour).Unix()
-	quotaBody = fmt.Sprintf(`{"plan_type":"pro","rate_limit":{"primary_window":{"used_percent":15,"limit_window_seconds":18000,"reset_at":%d}},"credits":{"balance":"20"}}`, reset)
+	reset := time.Now().Add(5 * time.Hour).Unix()
+	quotaBody = fmt.Sprintf(`{"plan_type":"pro","rate_limit":{"primary_window":{"used_percent":0,"limit_window_seconds":18000,"reset_at":%d}},"credits":{"balance":"20"}}`, reset)
 	quotaRequest := pluginapi.QuotaFetchRequest{Provider: "bps", ForceRefresh: true, AuthIndex: "quota-index", Metadata: map[string]any{"access_token": "quota-test", "account_id": "quota-account"}}
 	baseline, _, errBaseline := host.FetchQuota(quotaCtx, quotaRequest)
-	if errBaseline != nil || len(baseline.Summary) != 2 || !strings.Contains(baseline.Groups[0].Buckets[0].Description, "Collecting") {
+	if errBaseline != nil || len(baseline.Summary) != 2 || baseline.Groups[0].Buckets[0].Description != "" {
 		t.Fatalf("BPS USD baseline failed across C ABI: %+v, %v", baseline, errBaseline)
 	}
 	_, errUsage := callPlugin[rpcEmptyResponse](context.Background(), client, pluginabi.MethodUsageHandle, pluginapi.UsageRecord{Provider: "bps", Model: "gpt-6-astra", AuthIndex: "quota-index", Generate: true, RequestID: "quota-execution", Detail: pluginapi.UsageDetail{InputTokens: 100000, OutputTokens: 10000}})
 	if errUsage != nil {
 		t.Fatal(errUsage)
 	}
-	quotaBody = strings.Replace(quotaBody, `"used_percent":15`, `"used_percent":16`, 1)
+	quotaBody = strings.Replace(quotaBody, `"used_percent":0`, `"used_percent":16`, 1)
 	estimate, _, errEstimate := host.FetchQuota(quotaCtx, quotaRequest)
-	if errEstimate != nil || len(estimate.Summary) != 4 || estimate.Summary[0].Unit != "credits" || estimate.Summary[2].Currency != "USD" || math.Abs(estimate.Summary[2].Value-126) > 1e-8 || math.Abs(estimate.Summary[3].Value-150) > 1e-8 {
+	if errEstimate != nil || len(estimate.Summary) != 4 || estimate.Summary[0].Unit != "credits" || estimate.Summary[2].Currency != "USD" || math.Abs(estimate.Summary[2].Value-7.875) > 1e-8 || math.Abs(estimate.Summary[3].Value-9.375) > 1e-8 {
 		t.Fatalf("BPS USD estimate failed across C ABI: %+v, %v", estimate, errEstimate)
 	}
 	if _, errReload := registerRPCPlugin(context.Background(), host, "bps", client, pluginabi.MethodPluginRegister, []byte("quota-model-prices:\n  gpt-6-astra:\n    input: 10\n    output: 50\n")); errReload != nil {
 		t.Fatal(errReload)
 	}
 	restored, _, errRestored := host.FetchQuota(quotaCtx, quotaRequest)
-	if errRestored != nil || len(restored.Summary) != 4 || math.Abs(restored.Summary[2].Value-126) > 1e-8 {
+	if errRestored != nil || len(restored.Summary) != 4 || math.Abs(restored.Summary[2].Value-7.875) > 1e-8 {
 		t.Fatalf("BPS USD estimate did not persist across registration: %+v, %v", restored, errRestored)
 	}
 	if plugin.Capabilities.ModelProvider == nil {

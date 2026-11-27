@@ -20,7 +20,7 @@ func (e *bpsQuotaEstimator) fetchSnapshot(req quotaFetchRequest, fetch func() (p
 	e.mu.Lock()
 	a := e.account(key, now)
 	if a.Fetching != nil {
-		if a.Snapshot != nil {
+		if a.Snapshot != nil && !req.ForceRefresh {
 			q := cloneQuotaSnapshot(a, now)
 			e.mu.Unlock()
 			return q, nil
@@ -28,6 +28,7 @@ func (e *bpsQuotaEstimator) fetchSnapshot(req quotaFetchRequest, fetch func() (p
 		done := a.Fetching
 		e.mu.Unlock()
 		<-done
+		req.ForceRefresh = false
 		return e.fetchSnapshot(req, fetch, now)
 	}
 	if !req.ForceRefresh && !a.AttemptedAt.IsZero() && now.Sub(a.AttemptedAt) < bpsQuotaCacheTTL {

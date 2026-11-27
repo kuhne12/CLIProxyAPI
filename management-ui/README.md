@@ -1,9 +1,9 @@
 # Customized BPS management panel
 
 `build.sh` fetches the management frontend at `upstream-revision`, applies
-`bps-quota.patch` and `bps-quota-style.patch` and the credential concurrency patch in order, installs its locked
-dependencies with Bun 1.4.3, and runs the
-frontend tests, lint, and production build. The result is one self-contained HTML
+`bps-quota.patch`, `bps-quota-style.patch`, `credential-concurrency.patch` and
+`bps-live-balance.patch` in order, installs its locked dependencies with Bun 1.4.3,
+and runs the frontend tests, lint, and production build. The result is one self-contained HTML
 file. CI passes this exact artifact and its SHA256 to the deployment script.
 
 ```sh
@@ -19,14 +19,10 @@ credit counts cannot enable redemption. Reset failures are never automatically
 retried. Tests use synthetic credentials and mocked upstream requests; deployment
 verification must never consume a production reset credit.
 
-The presentation patch unifies BPS and Codex quota cards using the existing Codex
-plan labels, remaining-capacity meters, and reset-time layout. Both providers offer
-the same read-only balance disclosure. Upstream credit balances preserve zero and
-unlimited states; missing balances are explicitly unavailable. BPS dollar estimates
-remain labeled estimates, are listed separately for each window, and are never
-added together or substituted for the provider's credit balance. Opening balance
-details performs no request or quota redemption. Seven locales and local browser
-checks cover the shared disclosure, refresh, dark/light themes, and mobile layouts.
+The panel shows BPS estimated remaining and total together for each account
+window. The balance disclosure displays the reported amount in dollars and
+preserves zero, unavailable and unlimited values. The quota, auth files and
+routing pages use the same credential concurrency counts and status colors.
 
 The production image includes the panel. Deployment sets the v8 setting
 `management.disable-auto-update-panel` to preserve the customized build. The

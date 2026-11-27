@@ -54,10 +54,14 @@ func (e *bpsQuotaEstimator) fetchSnapshot(req quotaFetchRequest, fetch func() (p
 	}
 	a.RefreshFailed = errFetch != nil
 	if errFetch == nil {
-		e.annotateLocked(req, &q, now)
-		q.ObservedAt = now.UTC().Format(time.RFC3339Nano)
+		observedAt, errObserved := time.Parse(time.RFC3339Nano, q.ObservedAt)
+		if errObserved != nil {
+			observedAt = now
+		}
+		e.annotateLocked(req, &q, observedAt)
+		q.ObservedAt = observedAt.UTC().Format(time.RFC3339Nano)
 		q.Stale = false
-		a.Snapshot, a.ObservedAt = &q, now
+		a.Snapshot, a.ObservedAt = &q, observedAt
 		e.saveCalibrationsLocked()
 	}
 	if a.Snapshot != nil {
@@ -76,16 +80,20 @@ func cloneQuotaSnapshot(a *quotaEstimateAccount, now time.Time) pluginapi.QuotaF
 	return q
 }
 
-func (e *bpsQuotaEstimator) invalidateSnapshot(index, id string) {
+func (e *bpsQuotaEstimator) invalidateSnapshot(index, id string, resetAt time.Time) {
 	key, ok := quotaEstimateKey(index, id)
 	if !ok {
 		return
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if a := e.accounts[key]; a != nil {
-		// A confirmed reset invalidates both the cached redemption credit and samples.
-		delete(e.accounts, key)
-		e.saveCalibrationsLocked()
+	previous := e.accounts[key]
+	// Replace the entry so a quota request started before redemption cannot restore it.
+	delete(e.accounts, key)
+	a := e.account(key, resetAt)
+	a.ManualReset = resetAt
+	if previous != nil {
+		a.Seen, a.Order = previous.Seen, previous.Order
 	}
+	e.saveCalibrationsLocked()
 }

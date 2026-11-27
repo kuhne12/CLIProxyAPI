@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"math"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -99,75 +98,56 @@ func TestBPSQuotaPriceAccountsForCacheReasoningTierAndContext(t *testing.T) {
 	}
 }
 
-func TestBPSQuotaEstimatesOnlyObservedPercentageDelta(t *testing.T) {
+func TestBPSQuotaRecalculatesFromResetOnEveryRefresh(t *testing.T) {
 	e := quotaTestEstimator(t)
-	now := time.Unix(1800000000, 0).UTC()
-	e.observe(quotaTestRecord(), now) // Historical usage predating calibration must be excluded.
-	q := quotaTestAnnotate(e, 0.8, now)
-	if len(q.Summary) != 0 || !strings.Contains(q.Groups[0].Buckets[0].Description, "Collecting") {
-		t.Fatalf("baseline was presented as an estimate: %+v", q)
+	start := time.Unix(1800000000, 0).UTC()
+	request := quotaFetchRequest{QuotaFetchRequest: pluginapi.QuotaFetchRequest{Provider: "bps", AuthIndex: "test-index"}}
+	remaining := 1.0
+	calls := 0
+	fetch := func() (pluginapi.QuotaFetchResponse, error) {
+		calls++
+		return quotaTestResponse(remaining, start), nil
 	}
-	e.observe(quotaTestRecord(), now)
-	q = quotaTestAnnotate(e, 0.795, now)
-	if len(q.Summary) != 0 {
-		t.Fatal("fractional percentage sample bypassed minimum")
+	record := quotaTestRecord()
+	record.RequestedAt = start.Add(-time.Second)
+	e.observe(record, start)
+	record.RequestedAt = start
+	e.observe(record, start)
+	if q, err := e.fetchSnapshot(request, fetch, start); err != nil || len(q.Summary) != 0 {
+		t.Fatalf("0%% usage cannot be divided: %+v %v", q.Summary, err)
 	}
-	q = quotaTestAnnotate(e, 0.78, now)
-	if len(q.Summary) != 2 || math.Abs(q.Summary[0].Value-56.94) > 1e-8 || math.Abs(q.Summary[1].Value-73) > 1e-8 || q.Summary[0].Currency != "USD" || q.Summary[0].Format != "currency" {
-		t.Fatalf("incorrect USD estimate: %+v", q)
+	remaining = .995
+	if q, err := e.fetchSnapshot(request, fetch, start.Add(time.Minute)); err != nil || len(q.Summary) != 2 || math.Abs(q.Summary[1].Value-292) > 1e-7 {
+		t.Fatalf("automatic refresh with fractional usage missed the reset boundary: %+v %v", q.Summary, err)
 	}
-	q = quotaTestAnnotate(e, 0.78, now)
-	if len(q.Summary) != 2 {
-		t.Fatal("stable quota lost its calibrated estimate")
+	request.ForceRefresh = true
+	record.RequestedAt = start.Add(time.Minute)
+	e.observe(record, record.RequestedAt)
+	q, err := e.fetchSnapshot(request, fetch, start.Add(61*time.Second))
+	if err != nil || len(q.Summary) != 2 || math.Abs(q.Summary[1].Value-584) > 1e-7 || math.Abs(q.Summary[0].Value-581.08) > 1e-7 || q.Summary[1].Currency != "USD" {
+		t.Fatalf("manual refresh with the same percentage missed new usage: %+v %v", q.Summary, err)
 	}
-	q = quotaTestAnnotate(e, 0, now)
-	if len(q.Summary) != 2 || q.Summary[0].Value != 0 {
-		t.Fatal("exhausted quota did not show calibrated zero remaining")
+	remaining = 0
+	if q, err = e.fetchSnapshot(request, fetch, start.Add(62*time.Second)); err != nil || len(q.Summary) != 2 || q.Summary[0].Value != 0 || math.Abs(q.Summary[1].Value-2.92) > 1e-7 || calls != 4 {
+		t.Fatalf("100%% usage estimate incorrect: %+v %v", q.Summary, err)
 	}
 }
 
-func TestBPSQuotaSamplesResetOnUncertainty(t *testing.T) {
-	now := time.Unix(1800000000, 0).UTC()
-	for _, name := range []string{"window", "percentage decrease", "plan", "price change", "restart", "missing reset"} {
-		t.Run(name, func(t *testing.T) {
-			e := quotaTestEstimator(t)
-			quotaTestAnnotate(e, 0.8, now)
-			e.observe(quotaTestRecord(), now)
-			if q := quotaTestAnnotate(e, 0.78, now); len(q.Summary) != 2 {
-				t.Fatal("fixture did not calibrate")
-			}
-			q := quotaTestResponse(0.77, now)
-			switch name {
-			case "window":
-				q.Groups[0].Buckets[0].ResetTime = now.Add(8 * 24 * time.Hour).Format(time.RFC3339)
-			case "percentage decrease":
-				q.Groups[0].Buckets[0].RemainingFraction = 0.99
-			case "plan":
-				q.Subscription.Plan = "other-plan"
-			case "unpriced":
-				r := quotaTestRecord()
-				r.Model = "unknown"
-				e.observe(r, now)
-			case "failure":
-				r := quotaTestRecord()
-				r.Failed = true
-				e.observe(r, now)
-			case "price change":
-				if err := e.configure(quotaConfigRequest(t, quotaTestPrices+"cache-creation-as-input: true\n"), false); err != nil {
-					t.Fatal(err)
-				}
-			case "restart":
-				if err := e.configure(quotaConfigRequest(t, quotaTestPrices), true); err != nil {
-					t.Fatal(err)
-				}
-			case "missing reset":
-				q.Groups[0].Buckets[0].ResetTime = ""
-			}
-			e.annotate(quotaFetchRequest{QuotaFetchRequest: pluginapi.QuotaFetchRequest{AuthIndex: "test-index"}}, &q, now)
-			if len(q.Summary) != 0 {
-				t.Fatalf("stale estimate survived %s: %+v", name, q.Summary)
-			}
-		})
+func TestBPSQuotaManualResetExcludesEarlierRequests(t *testing.T) {
+	e := quotaTestEstimator(t)
+	start := time.Unix(1800000000, 0).UTC()
+	resetAt := start.Add(time.Minute)
+	e.observe(quotaTestRecord(), start)
+	e.invalidateSnapshot("test-index", "", resetAt)
+	r := quotaTestRecord()
+	r.RequestedAt = resetAt.Add(-time.Second)
+	e.observe(r, resetAt.Add(time.Second))
+	r.RequestedAt = resetAt
+	e.observe(r, resetAt.Add(time.Second))
+	q := quotaTestResponse(.98, start)
+	e.annotate(quotaFetchRequest{QuotaFetchRequest: pluginapi.QuotaFetchRequest{AuthIndex: "test-index"}}, &q, resetAt.Add(time.Second))
+	if len(q.Summary) != 2 || math.Abs(q.Summary[1].Value-73) > 1e-8 {
+		t.Fatalf("pre-reset executions contributed to the next balance: %+v", q.Summary)
 	}
 }
 
@@ -189,7 +169,7 @@ func TestBPSQuotaIsolationDedupeAndExternalUsage(t *testing.T) {
 	r.Generate = false
 	e.observe(r, now)
 	q := quotaTestAnnotate(e, 0.78, now)
-	if len(q.Summary) != 2 || math.Abs(q.Summary[1].Value-73) > 1e-8 {
+	if len(q.Summary) != 2 || math.Abs(q.Summary[1].Value-1.46/.22) > 1e-8 {
 		t.Fatalf("cross-account usage or duplicate counting: %+v", q)
 	}
 	e = quotaTestEstimator(t)
@@ -200,8 +180,8 @@ func TestBPSQuotaIsolationDedupeAndExternalUsage(t *testing.T) {
 	}
 	e.observe(quotaTestRecord(), now)
 	q = quotaTestAnnotate(e, 0.68, now)
-	if len(q.Summary) != 2 || math.Abs(q.Summary[1].Value-73) > 1e-8 {
-		t.Fatal("external usage polluted new calibration")
+	if len(q.Summary) != 2 || math.Abs(q.Summary[1].Value-1.46/.32) > 1e-8 {
+		t.Fatal("estimate used a percentage delta")
 	}
 }
 
@@ -224,6 +204,7 @@ func TestBPSQuotaIndependentWindowsAndCredits(t *testing.T) {
 	makeQuota := func(primary, secondary float64) pluginapi.QuotaFetchResponse {
 		q := quotaTestResponse(primary, now)
 		q.Groups[0].Buckets[0].Window = "5h"
+		q.Groups[0].Buckets[0].ResetTime = now.Add(5 * time.Hour).Format(time.RFC3339)
 		q.Groups[0].Buckets = append(q.Groups[0].Buckets, quotaTestResponse(secondary, now).Groups[0].Buckets[0])
 		q.Groups = append(q.Groups, pluginapi.QuotaGroup{DisplayName: "Code review", Buckets: []pluginapi.QuotaBucket{{Window: "7d", RemainingFraction: 0.5}}})
 		q.Summary = []pluginapi.QuotaMetric{{Key: "credits_balance", Value: 5, Unit: "credits"}}
@@ -235,7 +216,7 @@ func TestBPSQuotaIndependentWindowsAndCredits(t *testing.T) {
 	e.observe(quotaTestRecord(), now)
 	q = makeQuota(0.88, 0.79)
 	e.annotate(req, &q, now)
-	if len(q.Summary) != 5 || q.Summary[0].Unit != "credits" || math.Abs(q.Summary[2].Value-73) > 1e-8 || math.Abs(q.Summary[4].Value-146) > 1e-8 || q.Groups[1].Buckets[0].Description != "" {
+	if len(q.Summary) != 5 || q.Summary[0].Unit != "credits" || math.Abs(q.Summary[2].Value-1.46/.12) > 1e-8 || math.Abs(q.Summary[4].Value-1.46/.21) > 1e-8 || q.Groups[1].Buckets[0].Description != "" {
 		t.Fatalf("quota groups or units conflated: %+v", q)
 	}
 }
@@ -257,7 +238,7 @@ func TestBPSQuotaConcurrentUsageAndQueries(t *testing.T) {
 	}
 	wg.Wait()
 	q := quotaTestAnnotate(e, 0.78, now)
-	if len(q.Summary) != 2 || math.Abs(q.Summary[1].Value-7300) > 1e-7 {
+	if len(q.Summary) != 2 || math.Abs(q.Summary[1].Value-146/.22) > 1e-7 {
 		t.Fatalf("lost concurrent samples: %+v", q)
 	}
 }
@@ -273,7 +254,9 @@ func TestBPSQuotaLifecycleDispatchPreservesSamplesOnUnchangedConfig(t *testing.T
 	}
 	now := time.Unix(1800000000, 0).UTC()
 	quotaTestAnnotate(quotaEstimator, 0.8, now)
-	usage, errMarshal := json.Marshal(quotaTestRecord())
+	record := quotaTestRecord()
+	record.RequestedAt = now
+	usage, errMarshal := json.Marshal(record)
 	if errMarshal != nil {
 		t.Fatal(errMarshal)
 	}

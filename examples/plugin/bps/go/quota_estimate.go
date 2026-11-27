@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,28 +35,26 @@ type quotaEstimateConfig struct {
 	Prices               map[string]quotaModelPrice `yaml:"quota-model-prices"`
 }
 
+type quotaCostEntry struct {
+	At  time.Time `json:"at"`
+	USD float64   `json:"usd"`
+}
+
 type quotaEstimateWindow struct {
-	SampleStarted time.Time
-	Restored      bool
-	Reset         time.Time
-	Started       time.Time
-	BaseUsed      float64
-	LastUsed      float64
-	LastCost      float64
-	BaseCost      float64
-	BaseUnknown   uint64
-	TotalUSD      float64
-	SampleCost    float64
-	SamplePoints  float64
-	PriorCost     float64
-	PriorPoints   float64
+	Start     time.Time `json:"start"`
+	Reset     time.Time `json:"reset"`
+	LastUsed  float64   `json:"last_used"`
+	OlderCost float64   `json:"older_cost"`
+	Complete  bool      `json:"complete"`
 }
 
 type quotaEstimateAccount struct {
-	Cost          float64
-	Unknown       uint64
 	Plan          string
 	Touched       time.Time
+	Since         time.Time
+	ManualReset   time.Time
+	HistoryFloor  time.Time
+	History       []quotaCostEntry
 	Windows       map[string]*quotaEstimateWindow
 	Seen          map[[32]byte]bool
 	Order         [][32]byte
@@ -66,16 +66,17 @@ type quotaEstimateAccount struct {
 }
 
 type bpsQuotaEstimator struct {
-	mu         sync.Mutex
-	config     quotaEstimateConfig
-	accounts   map[[32]byte]*quotaEstimateAccount
-	statePath  string
-	configured bool
+	mu            sync.Mutex
+	config        quotaEstimateConfig
+	accounts      map[[32]byte]*quotaEstimateAccount
+	statePath     string
+	configured    bool
+	trackingSince time.Time
 }
 
 const quotaEstimateMaxAccounts = 256
 const quotaEstimateMaxRequests = 4096
-const quotaEstimateMinPoints = 1.0
+const quotaEstimateMaxEntries = 4096
 
 var quotaEstimator = newPersistentBPSQuotaEstimator("plugins/bps-quota-estimates.json")
 
@@ -114,6 +115,7 @@ func (e *bpsQuotaEstimator) configure(raw []byte, reset bool) error {
 	defer e.mu.Unlock()
 	changed := !reflect.DeepEqual(e.config, cfg)
 	if reset || changed {
+		e.trackingSince = time.Now()
 		e.accounts = make(map[[32]byte]*quotaEstimateAccount)
 	}
 	e.config = cfg
@@ -150,7 +152,7 @@ func (e *bpsQuotaEstimator) account(key [32]byte, now time.Time) *quotaEstimateA
 			}
 			delete(e.accounts, oldest)
 		}
-		a = &quotaEstimateAccount{Windows: make(map[string]*quotaEstimateWindow), Seen: make(map[[32]byte]bool)}
+		a = &quotaEstimateAccount{Since: e.trackingSince, Windows: make(map[string]*quotaEstimateWindow), Seen: make(map[[32]byte]bool)}
 		e.accounts[key] = a
 	}
 	a.Touched = now
@@ -171,29 +173,54 @@ func (e *bpsQuotaEstimator) observe(record pluginapi.UsageRecord, now time.Time)
 		return
 	}
 	a := e.account(key, now)
-	if record.RequestID != "" {
-		id := sha256.Sum256([]byte(record.RequestID))
-		if a.Seen[id] {
-			return
-		}
-		if len(a.Order) == quotaEstimateMaxRequests {
-			delete(a.Seen, a.Order[0])
-			a.Order = a.Order[1:]
-		}
-		a.Seen[id] = true
-		a.Order = append(a.Order, id)
-	}
-	defer e.saveCalibrationsLocked()
-	// Failed executions can consume upstream quota without complete usage.
-	cost, priced := quotaUsageCost(record, e.config)
-	if record.Failed || !priced {
-		a.Unknown++
+	if record.RequestID != "" && !a.remember(sha256.Sum256([]byte(record.RequestID))) {
 		return
 	}
-	a.Cost += cost
-	if !finiteQuotaValue(a.Cost) {
-		a.Cost = 0
-		a.Unknown++
+	cost, priced := quotaUsageCost(record, e.config)
+	if record.Failed || !priced || cost == 0 {
+		return
+	}
+	at := record.RequestedAt
+	if at.IsZero() {
+		at = now
+	}
+	a.addCost(quotaCostEntry{At: at, USD: cost})
+	e.saveCalibrationsLocked()
+}
+
+func (a *quotaEstimateAccount) remember(id [32]byte) bool {
+	if a.Seen[id] {
+		return false
+	}
+	if len(a.Order) == quotaEstimateMaxRequests {
+		delete(a.Seen, a.Order[0])
+		a.Order = a.Order[1:]
+	}
+	a.Seen[id] = true
+	a.Order = append(a.Order, id)
+	return true
+}
+
+func (a *quotaEstimateAccount) addCost(cost quotaCostEntry) {
+	a.History = append(a.History, cost)
+	if len(a.History) > quotaEstimateMaxEntries {
+		oldest := 0
+		for i, entry := range a.History {
+			if entry.At.Before(a.History[oldest].At) {
+				oldest = i
+			}
+		}
+		entry := a.History[oldest]
+		a.History[oldest] = a.History[len(a.History)-1]
+		a.History = a.History[:len(a.History)-1]
+		if entry.At.After(a.HistoryFloor) {
+			a.HistoryFloor = entry.At
+		}
+		for _, window := range a.Windows {
+			if !entry.At.Before(window.Start) && entry.At.Before(window.Reset) {
+				window.OlderCost += entry.USD
+			}
+		}
 	}
 }
 
@@ -277,85 +304,107 @@ func (e *bpsQuotaEstimator) annotate(req quotaFetchRequest, quota *pluginapi.Quo
 	e.saveCalibrationsLocked()
 }
 
+func quotaWindowDuration(label string) time.Duration {
+	if len(label) < 2 {
+		return 0
+	}
+	unit := map[byte]time.Duration{'d': 24 * time.Hour, 'h': time.Hour, 'm': time.Minute, 's': time.Second}[label[len(label)-1]]
+	count, errCount := strconv.ParseInt(label[:len(label)-1], 10, 64)
+	if errCount != nil || unit == 0 || count <= 0 || count > int64(365*24*time.Hour/unit) {
+		return 0
+	}
+	return time.Duration(count) * unit
+}
+
+func clearBPSQuotaEstimates(quota *pluginapi.QuotaFetchResponse) {
+	quota.Summary = slices.DeleteFunc(quota.Summary, func(metric pluginapi.QuotaMetric) bool {
+		return strings.HasPrefix(metric.Key, "bps_estimated_")
+	})
+	for i := range quota.Groups {
+		if quota.Groups[i].DisplayName == "Account usage" {
+			for j := range quota.Groups[i].Buckets {
+				quota.Groups[i].Buckets[j].Description = ""
+			}
+		}
+	}
+}
+
 func (e *bpsQuotaEstimator) annotateLocked(req quotaFetchRequest, quota *pluginapi.QuotaFetchResponse, now time.Time) {
+	clearBPSQuotaEstimates(quota)
 	key, identified := quotaEstimateKey(req.AuthIndex, req.AuthID)
-	if len(e.config.Prices) == 0 {
+	if !identified || len(e.config.Prices) == 0 {
 		return
 	}
+	a := e.account(key, now)
 	plan := ""
 	if quota.Subscription != nil {
 		plan = quota.Subscription.Plan
 	}
-	for gi := range quota.Groups {
-		group := &quota.Groups[gi]
+	if a.Plan != "" && plan != "" && a.Plan != plan {
+		a.Since, a.ManualReset, a.HistoryFloor = now, time.Time{}, time.Time{}
+		a.History = nil
+		clear(a.Windows)
+	}
+	if plan != "" {
+		a.Plan = plan
+	}
+	e.importQuotaHistoryLocked(key, a)
+	for _, group := range quota.Groups {
 		if group.DisplayName != "Account usage" {
 			continue
 		}
-		for bi := range group.Buckets {
-			bucket := &group.Buckets[bi]
-			bucket.Description = "USD estimate unavailable: credential identity and a future quota reset time are required."
+		for bi, bucket := range group.Buckets {
 			reset, errReset := time.Parse(time.RFC3339, bucket.ResetTime)
+			duration := quotaWindowDuration(bucket.Window)
 			serverNow := now.Add(time.Duration(quota.ServerTimeOffsetMs) * time.Millisecond)
-			if !identified || errReset != nil || !reset.After(serverNow) {
+			if errReset != nil || !reset.After(serverNow) || duration == 0 || !finiteQuotaValue(bucket.RemainingFraction) || bucket.RemainingFraction > 1 {
 				continue
 			}
-			a := e.account(key, now)
-			if a.Plan != plan || len(a.Windows) > 4 {
-				a.Plan = plan
-				a.Windows = make(map[string]*quotaEstimateWindow)
+			used := 1 - bucket.RemainingFraction
+			start := reset.Add(-duration)
+			if a.ManualReset.After(start) {
+				start = a.ManualReset
 			}
-			used := (1 - bucket.RemainingFraction) * 100
-			windowKey := bucket.Window
-			w := a.Windows[windowKey]
-			// Relative reset times can vary slightly because of HTTP date precision.
-			resetChanged := w != nil && math.Abs(reset.Sub(w.Reset).Seconds()) > 60
-			// Restarted traffic counters cannot account for activity while offline.
-			// Keep the completed calibration, but start a new observation interval.
-			if w != nil && w.Restored {
-				w.Restored = false
-				w.PriorCost, w.PriorPoints = w.SampleCost, w.SamplePoints
-				w.Started, w.BaseUsed, w.BaseCost, w.BaseUnknown = now, used, a.Cost, a.Unknown
+			w := a.Windows[bucket.Window]
+			if w == nil || math.Abs(reset.Sub(w.Reset).Seconds()) > 2 || used+1e-8 < w.LastUsed {
+				uncertainReset := w != nil && used+1e-8 < w.LastUsed && !start.After(w.Start)
+				if uncertainReset {
+					// A reset with an unchanged upstream deadline has no exact start.
+					start = now
+				}
+				complete := !start.Before(a.Since) && start.After(a.HistoryFloor)
+				if uncertainReset && used > 1e-8 {
+					complete = false
+				}
+				if used <= 1e-8 && (start.Before(a.Since) || !start.After(a.HistoryFloor)) {
+					// Zero usage anchors a window that started before tracking began.
+					start, complete = now, true
+				}
+				if len(a.Windows) >= 4 && w == nil {
+					clear(a.Windows)
+				}
+				w = &quotaEstimateWindow{Start: start, Reset: reset, Complete: complete}
+				a.Windows[bucket.Window] = w
 			}
-			if w == nil || resetChanged || used+1e-8 < w.LastUsed {
-				w = &quotaEstimateWindow{Reset: reset, Started: now, BaseUsed: used, LastUsed: used, BaseCost: a.Cost, BaseUnknown: a.Unknown}
-				a.Windows[windowKey] = w
+			w.LastUsed = used
+			if !w.Complete || used <= 1e-8 {
+				continue
 			}
-			if w.BaseUnknown != a.Unknown || a.Cost < w.BaseCost || (w.TotalUSD > 0 && used > w.LastUsed+1e-8 && a.Cost == w.LastCost) {
-				w.PriorCost, w.PriorPoints = w.SampleCost, w.SamplePoints
-				w.Started, w.BaseUsed, w.BaseCost, w.BaseUnknown = now, used, a.Cost, a.Unknown
-			}
-			w.LastUsed, w.LastCost = used, a.Cost
-			deltaUsed, deltaCost := used-w.BaseUsed, a.Cost-w.BaseCost
-			if deltaUsed+1e-8 >= quotaEstimateMinPoints && deltaCost == 0 {
-				w.PriorCost, w.PriorPoints = w.SampleCost, w.SamplePoints
-				w.Started, w.BaseUsed, w.BaseCost, w.BaseUnknown = now, used, a.Cost, a.Unknown
-				deltaUsed = 0
-			}
-			if deltaUsed > 1e-8 && deltaCost > 0 {
-				// Weight disjoint valid intervals by their quota consumption. Repeated
-				// reads replace only the current interval, never count it twice.
-				sampleCost, samplePoints := w.PriorCost+deltaCost, w.PriorPoints+deltaUsed
-				estimate := sampleCost * 100 / samplePoints
-				if finiteQuotaValue(estimate) && estimate > 0 {
-					w.SampleCost, w.SamplePoints = sampleCost, samplePoints
-					if samplePoints+1e-8 >= quotaEstimateMinPoints {
-						w.TotalUSD = estimate
-					}
-					if w.SampleStarted.IsZero() {
-						w.SampleStarted = w.Started
-					}
+			cost := w.OlderCost
+			for _, entry := range a.History {
+				if !entry.At.Before(w.Start) && !entry.At.After(now) && entry.At.Before(w.Reset) {
+					cost += entry.USD
 				}
 			}
-			if w.TotalUSD <= 0 {
-				bucket.Description = fmt.Sprintf("Collecting USD estimate samples: $%.4f priced usage, %.2f percentage points since %s. Requires at least 1 percentage point and priced usage; samples update automatically.", deltaCost, deltaUsed, w.Started.UTC().Format(time.RFC3339))
+			total := cost / used
+			if total <= 0 || !finiteQuotaValue(total) {
 				continue
 			}
 			prefix := fmt.Sprintf("bps_estimated_%d_", bi)
 			quota.Summary = append(quota.Summary,
-				pluginapi.QuotaMetric{Key: prefix + "remaining_usd", Label: "Estimated remaining (" + bucket.Window + ")", Value: w.TotalUSD * bucket.RemainingFraction, Format: "currency", Currency: "USD"},
-				pluginapi.QuotaMetric{Key: prefix + "total_usd", Label: "Estimated total (" + bucket.Window + ")", Value: w.TotalUSD, Format: "currency", Currency: "USD"},
+				pluginapi.QuotaMetric{Key: prefix + "remaining_usd", Label: "Estimated remaining (" + bucket.Window + ")", Value: total * bucket.RemainingFraction, Format: "currency", Currency: "USD"},
+				pluginapi.QuotaMetric{Key: prefix + "total_usd", Label: "Estimated total (" + bucket.Window + ")", Value: total, Format: "currency", Currency: "USD"},
 			)
-			bucket.Description = fmt.Sprintf("Estimated API value, not an official or redeemable USD balance. Sample: $%.4f / %.2f percentage points since %s. Uses configured model prices and observed CPA traffic; external usage, model mix and rounded quota percentages affect accuracy.", w.SampleCost, w.SamplePoints, w.SampleStarted.UTC().Format(time.RFC3339))
 		}
 	}
 }

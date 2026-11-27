@@ -19,6 +19,8 @@ git -C "$source_dir" apply --check "$root/bps-quota-style.patch"
 git -C "$source_dir" apply "$root/bps-quota-style.patch"
 git -C "$source_dir" apply --check "$root/credential-concurrency.patch"
 git -C "$source_dir" apply "$root/credential-concurrency.patch"
+git -C "$source_dir" apply --check "$root/bps-live-balance.patch"
+git -C "$source_dir" apply "$root/bps-live-balance.patch"
 cd "$source_dir"
 bun=${BUN:-bun}
 test "$("$bun" --version)" = 1.4.3

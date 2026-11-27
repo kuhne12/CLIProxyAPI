@@ -296,53 +296,31 @@ service tier; unknown tiers or missing multipliers invalidate the sample. Option
 ordinary input and cache tokens, and the latter to output. Omit these fields for
 flat context pricing. See the Chinese README for a complete configuration example.
 
-Like Sub2API's window-cost estimate, calibration divides priced usage by quota
-utilization. This implementation uses deltas between quota observations, so a
-new installation never mistakes partial local history for full-window costs:
+Each fresh quota observation recomputes the estimate from priced BPS generation
+requests since the start of that window:
 
 ```text
-estimated total USD = sum(valid interval costs) * 100 / sum(valid interval percentage-point deltas)
+estimated total USD = priced usage since reset / current used fraction
 estimated remaining USD = estimated total USD * current remaining fraction
 ```
 
-From **0.5.8**, the matching CPA service queries enabled BPS accounts once per
-minute, independently of panel visits. These are read-only account-usage queries,
-not model generations. The panel loads visible BPS accounts automatically, polls
-once per minute while visible, and retains the last successful snapshot during
-refresh or an error. It displays the actual observation time and marks stale data.
-The plugin shares concurrent refreshes and caches each account for one minute;
-failed refreshes are throttled too. Reset credits are never redeemed automatically.
+The service queries enabled BPS accounts every minute. The panel refreshes while
+visible and keeps the latest successful snapshot during refresh or errors. Manual
+refresh uses the same calculation. Estimates appear after there is priced usage
+and the used percentage exceeds zero. Each window has its own amount and reset
+boundary. Failed or unpriced requests and activity outside this CPA are excluded
+from local costs. Upstream rounding and usage reporting delays affect estimates.
 
-The first successful query establishes a baseline. Once valid samples cover at
-least one percentage point, the window displays USD metrics. Valid disjoint
-intervals are combined by their consumed percentage points, so a small new sample
-cannot replace a mature estimate. Repeated reads do not count a sample twice.
-Windows are keyed by duration rather than their changing position in the response.
-The persisted one-point threshold uses the same floating-point tolerance as live
-sampling, including migration from the 0.5.7 state file.
-
-Accounting follows configured model, cache, tier and context prices. Total input
-and reasoning output are not counted twice. Failed or unpriced usage and gaps
-start a fresh interval while retaining prior valid samples. Plan changes, genuine
-quota refills, reset times and price changes invalidate the affected calibration.
-External or offline usage cannot be reliably priced and is excluded from new
-intervals; missing historical consumption cannot be reconstructed retrospectively.
-
-The private, atomic **version 2** file at `plugins/bps-quota-estimates.json` stores
-cumulative priced cost, uncertainty counters, bounded hashed request IDs, paired
-samples (including partial ones) and normalized quota snapshots. Usage callbacks
-persist their accounting without waiting for a UI query; they perform no network
-I/O. Credentials, prompts and raw token records are never stored there. Keep the
-plugins mount persistent. Restart retains the last good estimate and snapshot,
-but starts a new interval after validating the live plan and reset window. File
-errors are logged and current in-memory values remain usable. The deployment
-script backs up this file and restores it if the new release is rolled back.
-
-These amounts are **estimated API value, not an official or redeemable account
-balance**. External usage on the same upstream account, changing model mix, rounded
-quota percentages, and asynchronous reporting affect accuracy. They do not apply
-Sub2API user discounts or group multipliers, and do not convert upstream credits
-into dollars. Each quota window is estimated independently; do not sum windows.
+The private version 3 state file at `plugins/bps-quota-estimates.json` retains
+priced history, hashed request IDs, window state and quota snapshots across
+restarts. Older snapshots keep their upstream quota fields. The old interval
+estimates expire on migration. A current window with incomplete local history can
+be recovered with an operator-provided `bps-quota-history.json` in the same
+folder. It must contain `key`, `config_hash`, `since`, `through` and `entries`
+(each with `at`, `usd` and `hash`). Use the persisted pricing fingerprint, the
+hashed account key and SHA-256 hashes of the original request IDs. Include only
+verified, priced requests covering the reset boundary through the start of live
+tracking. Remove the import file after verifying the estimate.
 
 ## Inline images (0.5.3)
 

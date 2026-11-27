@@ -4,92 +4,58 @@ import (
 	"encoding/hex"
 	"errors"
 	"math"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/MoeForge/moego/json"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
-func TestQuotaWindowMigratesVersionOneRoundedSampleAndBucketOrder(t *testing.T) {
+func TestQuotaWindowMigratesLegacySnapshotsWithoutDeltaEstimates(t *testing.T) {
 	e := quotaTestEstimator(t)
 	e.statePath = filepath.Join(t.TempDir(), "quota.json")
 	now := time.Unix(1800000000, 0).UTC()
 	q := quotaTestResponse(.52, now)
-	reset, err := time.Parse(time.RFC3339, q.Groups[0].Buckets[0].ResetTime)
+	q.Groups[0].Buckets[0].Description = "Old sample explanation"
+	q.Summary = []pluginapi.QuotaMetric{{Key: "bps_estimated_0_total_usd", Value: 234}, {Key: "credits_balance", Value: 2}}
+	key, _ := quotaEstimateKey("test-index", "")
+	legacy, err := json.Marshal(map[string]any{"version": 2, "config_hash": e.priceFingerprint(), "accounts": []map[string]any{{
+		"key": hex.EncodeToString(key[:]), "plan": q.Subscription.Plan, "snapshot": q,
+		"windows": map[string]any{"7d": map[string]any{"last_used": 48, "total_usd": 234}},
+	}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	key, _ := quotaEstimateKey("test-index", "")
-	state := quotaCalibrationFile{Version: 1, ConfigHash: e.priceFingerprint(), Accounts: []quotaCalibrationAccount{{
-		Key: hex.EncodeToString(key[:]), Plan: q.Subscription.Plan, Touched: now,
-		Windows: map[string]quotaCalibration{"0:7d": {Reset: reset, Started: now.Add(-time.Hour), LastUsed: 48, TotalUSD: 234.3600000000006, SampleCost: 2.3436, SamplePoints: .9999999999999973}},
-	}}}
-	if err := writeQuotaCalibrations(e.statePath, state); err != nil {
+	if err := os.WriteFile(e.statePath, legacy, 0600); err != nil {
 		t.Fatal(err)
 	}
-	restored := newPersistentBPSQuotaEstimator(e.statePath)
-	if err := restored.configure(quotaConfigRequest(t, quotaTestPrices), true); err != nil {
+	if err := e.configure(quotaConfigRequest(t, quotaTestPrices), true); err != nil {
 		t.Fatal(err)
 	}
-	weekly := q.Groups[0].Buckets[0]
-	short := weekly
-	short.Window = "5h"
-	q.Groups[0].Buckets = append(q.Groups[0].Buckets, short)
-	q.Groups[0].Buckets[0], q.Groups[0].Buckets[1] = short, weekly
-	restored.annotate(quotaFetchRequest{QuotaFetchRequest: pluginapi.QuotaFetchRequest{AuthIndex: "test-index"}}, &q, now)
-	if len(q.Summary) != 2 || q.Summary[1].Label != "Estimated total (7d)" || math.Abs(q.Summary[1].Value-234.36) > 1e-8 {
-		t.Fatalf("version 1 migration or bucket reorder lost the existing estimate: %+v", q.Summary)
+	if a := e.accounts[key]; a == nil || len(a.Windows) != 0 || len(a.Snapshot.Summary) != 1 || a.Snapshot.Summary[0].Key != "credits_balance" || a.Snapshot.Groups[0].Buckets[0].Description != "" {
+		t.Fatalf("legacy migration retained an obsolete estimate or lost reported balance: %+v", a)
 	}
 }
 
-func TestQuotaWindowRestoresRoundedOnePointSample(t *testing.T) {
-	e := quotaTestEstimator(t)
-	e.statePath = filepath.Join(t.TempDir(), "quota.json")
-	now := time.Unix(1800000000, 0).UTC()
-	quotaTestAnnotate(e, .53, now)
-	e.observe(quotaTestRecord(), now)
-	before := quotaTestAnnotate(e, .52, now)
-	restored := newPersistentBPSQuotaEstimator(e.statePath)
-	if err := restored.configure(quotaConfigRequest(t, quotaTestPrices), true); err != nil {
-		t.Fatal(err)
-	}
-	after := quotaTestAnnotate(restored, .52, now)
-	if len(after.Summary) != 2 || math.Abs(after.Summary[1].Value-before.Summary[1].Value) > 1e-8 {
-		t.Fatalf("lost rounded 1-point calibration: before=%+v after=%+v", before.Summary, after.Summary)
-	}
-}
-
-func TestQuotaWindowWeightsDisjointSamplesWithoutDoubleCounting(t *testing.T) {
+func TestQuotaWindowKeepsCostWhenHistoryIsFolded(t *testing.T) {
 	e := quotaTestEstimator(t)
 	now := time.Unix(1800000000, 0).UTC()
-	quotaTestAnnotate(e, .8, now)
-	for range 4 {
+	quotaTestAnnotate(e, 1, now)
+	for range quotaEstimateMaxEntries + 1 {
 		e.observe(quotaTestRecord(), now)
 	}
-	quotaTestAnnotate(e, .76, now)
-	failed := quotaTestRecord()
-	failed.Failed = true
-	e.observe(failed, now)
-	quotaTestAnnotate(e, .73, now)
-	small := quotaTestRecord()
-	small.Detail.InputTokens /= 10
-	small.Detail.OutputTokens /= 10
-	small.Detail.CacheReadTokens /= 10
-	small.Detail.CacheCreationTokens /= 10
-	e.observe(small, now)
-	want := (4*1.46 + .146) * 100 / 5
-	for range 5 {
-		q := quotaTestAnnotate(e, .72, now)
-		if len(q.Summary) != 2 || math.Abs(q.Summary[1].Value-want) > 1e-8 {
-			t.Fatalf("short sample replaced history or repeated reads counted twice: %+v want %v", q.Summary, want)
-		}
+	q := quotaTestAnnotate(e, .74, now)
+	want := (quotaEstimateMaxEntries + 1) * 1.46 / .26
+	if len(q.Summary) != 2 || math.Abs(q.Summary[1].Value-want) > 1e-7 {
+		t.Fatalf("window lost cost when bounded history filled: %+v", q.Summary)
 	}
 }
 
-func TestQuotaWindowPersistsTrafficBeforeFirstClick(t *testing.T) {
+func TestQuotaWindowPersistsAndDeduplicatesBeforeFirstRefresh(t *testing.T) {
 	e := quotaTestEstimator(t)
 	e.statePath = filepath.Join(t.TempDir(), "quota.json")
 	now := time.Unix(1800000000, 0).UTC()
@@ -101,9 +67,9 @@ func TestQuotaWindowPersistsTrafficBeforeFirstClick(t *testing.T) {
 		t.Fatal(err)
 	}
 	restored.observe(r, now)
-	key, _ := quotaEstimateKey(r.AuthIndex, r.AuthID)
-	if a := restored.accounts[key]; a == nil || math.Abs(a.Cost-1.46) > 1e-8 {
-		t.Fatalf("traffic was lost or counted twice on restart: %+v", a)
+	q := quotaTestAnnotate(restored, .50, now)
+	if len(q.Summary) != 2 || math.Abs(q.Summary[1].Value-2.92) > 1e-8 {
+		t.Fatalf("traffic was lost or counted twice on restart: %+v", q.Summary)
 	}
 }
 
@@ -147,7 +113,7 @@ func TestQuotaSnapshotDeduplicatesRetainsAndInvalidates(t *testing.T) {
 	if err != nil || !q.Stale || len(q.Groups) != 1 {
 		t.Fatal("snapshot did not survive restart")
 	}
-	restored.invalidateSnapshot(req.AuthIndex, req.AuthID)
+	restored.invalidateSnapshot(req.AuthIndex, req.AuthID, now.Add(2*time.Minute))
 	if _, err := restored.fetchSnapshot(req, fail, now.Add(2*time.Minute)); err == nil {
 		t.Fatal("reset reused stale quota or credits")
 	}

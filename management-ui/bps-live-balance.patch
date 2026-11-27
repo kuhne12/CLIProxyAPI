@@ -1,0 +1,491 @@
+diff --git a/src/components/common/CredentialConcurrency.module.scss b/src/components/common/CredentialConcurrency.module.scss
+new file mode 100644
+index 0000000..8111267
+--- /dev/null
++++ b/src/components/common/CredentialConcurrency.module.scss
+@@ -0,0 +1,36 @@
++@use '../../styles/mixins' as *;
++
++.badge {
++  display: inline-flex;
++  width: fit-content;
++  align-items: center;
++  border-radius: 4px;
++  padding: 2px 6px;
++  background: var(--concurrency-bg, var(--bg-secondary));
++  color: var(--concurrency-text, var(--text-secondary));
++  font-family: $font-mono;
++  font-size: 11px;
++  line-height: 1.4;
++  font-variant-numeric: tabular-nums;
++  white-space: nowrap;
++
++  &[data-concurrency='idle'] {
++    --concurrency-bg: var(--success-badge-bg);
++    --concurrency-text: var(--success-badge-text);
++  }
++
++  &[data-concurrency='active'] {
++    --concurrency-bg: var(--info-badge-bg, #dbeafe);
++    --concurrency-text: var(--info-badge-text, #1e40af);
++  }
++
++  &[data-concurrency='busy'] {
++    --concurrency-bg: #fef3c7;
++    --concurrency-text: #92400e;
++  }
++
++  &[data-concurrency='full'] {
++    --concurrency-bg: var(--warning-bg);
++    --concurrency-text: var(--warning-text);
++  }
++}
+diff --git a/src/components/common/CredentialConcurrency.tsx b/src/components/common/CredentialConcurrency.tsx
+index 5ab3b06..e37ac7c 100644
+--- a/src/components/common/CredentialConcurrency.tsx
++++ b/src/components/common/CredentialConcurrency.tsx
+@@ -2,12 +2,21 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
+ import { useTranslation } from 'react-i18next';
+ import { apiClient } from '@/services/api/client';
+ import type { AuthFileItem } from '@/types';
++import styles from './CredentialConcurrency.module.scss';
+ 
+ type Row = { id: string; auth_index: string; current: number; limit: number };
+ const Concurrency = createContext<Map<string, Row> | null>(null);
+ 
+-export function CredentialConcurrencyProvider({ children, enabled }: { children: ReactNode; enabled: boolean }) {
+-  const [snapshot, setSnapshot] = useState<{ revision: number; rows: Map<string, Row> } | null>(null);
++export function CredentialConcurrencyProvider({
++  children,
++  enabled,
++}: {
++  children: ReactNode;
++  enabled: boolean;
++}) {
++  const [snapshot, setSnapshot] = useState<{ revision: number; rows: Map<string, Row> } | null>(
++    null
++  );
+   const revision = apiClient.getConnectionRevision();
+   useEffect(() => {
+     if (!enabled) return;
+@@ -17,7 +26,10 @@ export function CredentialConcurrencyProvider({ children, enabled }: { children:
+       if (document.hidden || pending) return;
+       pending = true;
+       try {
+-        const data = await apiClient.get<{ credentials: Row[] }>('/observability/credentials/concurrency', { signal: controller.signal });
++        const data = await apiClient.get<{ credentials: Row[] }>(
++          '/observability/credentials/concurrency',
++          { signal: controller.signal }
++        );
+         if (controller.signal.aborted || revision !== apiClient.getConnectionRevision()) return;
+         const rows = new Map<string, Row>();
+         for (const row of data.credentials) {
+@@ -27,19 +39,44 @@ export function CredentialConcurrencyProvider({ children, enabled }: { children:
+         setSnapshot({ revision, rows });
+       } catch {
+         if (!controller.signal.aborted) setSnapshot(null);
+-      } finally { pending = false; }
++      } finally {
++        pending = false;
++      }
+     };
+     void refresh();
+     const timer = window.setInterval(refresh, 5000);
+     document.addEventListener('visibilitychange', refresh);
+-    return () => { controller.abort(); window.clearInterval(timer); document.removeEventListener('visibilitychange', refresh); };
++    return () => {
++      controller.abort();
++      window.clearInterval(timer);
++      document.removeEventListener('visibilitychange', refresh);
++    };
+   }, [enabled, revision]);
+-  return <Concurrency.Provider value={enabled && snapshot?.revision === revision ? snapshot.rows : null}>{children}</Concurrency.Provider>;
++  return (
++    <Concurrency.Provider value={enabled && snapshot?.revision === revision ? snapshot.rows : null}>
++      {children}
++    </Concurrency.Provider>
++  );
++}
++
++function getConcurrencyLevel(row: Pick<Row, 'current' | 'limit'> | undefined) {
++  if (!row) return 'unknown';
++  if (row.current === 0) return 'idle';
++  if (row.limit > 0 && row.current >= row.limit) return 'full';
++  return row.limit > 0 && row.current / row.limit >= 0.75 ? 'busy' : 'active';
+ }
+ 
+-export function CredentialConcurrencyLabel({ file }: { file: AuthFileItem }) {
++export function CredentialConcurrencyLabel({
++  file,
++}: {
++  file: Pick<AuthFileItem, 'name' | 'authIndex'>;
++}) {
+   const rows = useContext(Concurrency);
+   const { t } = useTranslation();
+   const row = rows?.get('index:' + file.authIndex) ?? rows?.get('id:' + file.name);
+-  return <small style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{t('auth_files.concurrency')} {row ? row.current + '/' + (row.limit || '∞') : '—'}</small>;
++  return (
++    <small className={styles.badge} data-concurrency={getConcurrencyLevel(row)}>
++      {t('auth_files.concurrency')} {row ? row.current + '/' + (row.limit || '∞') : '—'}
++    </small>
++  );
+ }
+diff --git a/src/features/quota/components/QuotaBalanceDetails.module.scss b/src/features/quota/components/QuotaBalanceDetails.module.scss
+index 6580389..985dd80 100644
+--- a/src/features/quota/components/QuotaBalanceDetails.module.scss
++++ b/src/features/quota/components/QuotaBalanceDetails.module.scss
+@@ -62,12 +62,6 @@
+   overflow-wrap: anywhere;
+   text-align: right;
+ }
+-.note {
+-  margin: 0;
+-  line-height: 1.5;
+-  color: var(--text-tertiary);
+-}
+-
+ [data-quota-glance] .details {
+   display: none;
+ }
+diff --git a/src/features/quota/components/QuotaBalanceDetails.tsx b/src/features/quota/components/QuotaBalanceDetails.tsx
+index 5713604..8dca93b 100644
+--- a/src/features/quota/components/QuotaBalanceDetails.tsx
++++ b/src/features/quota/components/QuotaBalanceDetails.tsx
+@@ -1,4 +1,3 @@
+-import type { ReactNode } from 'react';
+ import { useTranslation } from 'react-i18next';
+ import { IconChevronDown } from '@/components/ui/icons';
+ import styles from './QuotaBalanceDetails.module.scss';
+@@ -6,30 +5,28 @@ import styles from './QuotaBalanceDetails.module.scss';
+ interface QuotaBalanceDetailsProps {
+   balance: string | number | null;
+   unlimited?: boolean;
+-  preview?: ReactNode;
+-  children?: ReactNode;
+ }
+ 
+ /** Read-only balance details shared by Codex and BPS in both quota hosts. */
+-export function QuotaBalanceDetails({
+-  balance,
+-  unlimited = false,
+-  children,
+-  preview,
+-}: QuotaBalanceDetailsProps) {
+-  const { t } = useTranslation();
++export function QuotaBalanceDetails({ balance, unlimited = false }: QuotaBalanceDetailsProps) {
++  const { t, i18n } = useTranslation();
++  const amount = balance === null ? NaN : Number(balance);
+   const value = unlimited
+     ? t('codex_quota.credit_unlimited')
+-    : balance === null
++    : !Number.isFinite(amount) || amount < 0
+       ? t('quota_balance.unavailable')
+-      : `${balance} ${t('quota_balance.credit_unit')}`;
++      : new Intl.NumberFormat(i18n.resolvedLanguage, {
++          style: 'currency',
++          currency: 'USD',
++          currencyDisplay: 'narrowSymbol',
++        }).format(amount);
+ 
+   return (
+     <details className={styles.details} data-quota-balance="">
+       <summary className={styles.trigger} aria-label={t('quota_balance.view') + ' · ' + value}>
+         <span>{t('quota_balance.view')}</span>
+         <span className={styles.value} title={value}>
+-          {preview ?? (unlimited || balance === null ? value : balance)}
++          {value}
+         </span>
+         <IconChevronDown size={14} className={styles.chevron} aria-hidden="true" />
+       </summary>
+@@ -38,14 +35,6 @@ export function QuotaBalanceDetails({
+           <span>{t('quota_balance.label')}</span>
+           <strong>{value}</strong>
+         </div>
+-        <p className={styles.note}>
+-          {t(
+-            balance === null && !unlimited
+-              ? 'quota_balance.not_returned'
+-              : 'quota_balance.credits_help'
+-          )}
+-        </p>
+-        {children}
+       </div>
+     </details>
+   );
+diff --git a/src/features/quota/providers/plugin/BpsQuotaBody.module.scss b/src/features/quota/providers/plugin/BpsQuotaBody.module.scss
+index 0d6d0e7..5cfab61 100644
+--- a/src/features/quota/providers/plugin/BpsQuotaBody.module.scss
++++ b/src/features/quota/providers/plugin/BpsQuotaBody.module.scss
+@@ -8,13 +8,8 @@
+   min-width: 0;
+ }
+ 
+-.estimate {
+-  display: flex;
+-  flex-direction: column;
+-  gap: 5px;
+-}
+-
+ .amounts {
++  margin-top: 5px;
+   display: flex;
+   flex-wrap: wrap;
+   gap: 4px 12px;
+diff --git a/src/features/quota/providers/plugin/BpsQuotaBody.tsx b/src/features/quota/providers/plugin/BpsQuotaBody.tsx
+index 672d63d..60ba0b9 100644
+--- a/src/features/quota/providers/plugin/BpsQuotaBody.tsx
++++ b/src/features/quota/providers/plugin/BpsQuotaBody.tsx
+@@ -63,20 +63,6 @@ export function BpsQuotaBody({
+     currency: 'USD',
+     currencyDisplay: 'narrowSymbol',
+   });
+-  const estimates = quota.groups
+-    .filter((group) => group.label === 'Account usage')
+-    .flatMap((group) =>
+-      group.buckets.map((bucket) => ({
+-        id: bucket.id,
+-        window: windowLabel(bucket.window || bucket.label),
+-        estimate: bucket.window ? quota.bpsEstimates?.[bucket.window] : undefined,
+-      }))
+-    );
+-  const preview =
+-    balance === null && !unlimited && estimates.length === 1 && estimates[0].estimate
+-      ? t('quota_balance.estimated_value', { value: money.format(estimates[0].estimate.remaining) })
+-      : undefined;
+-
+   return (
+     <div className={styles.body} data-bps-quota-layout="codex-v1">
+       <div className={classes.codexPlan}>
+@@ -111,32 +97,7 @@ export function BpsQuotaBody({
+         {planItems}
+       </div>
+       {afterPlan}
+-      <QuotaBalanceDetails balance={balance} unlimited={unlimited} preview={preview}>
+-        {estimates.length > 0 && (
+-          <>
+-            <p className={styles.note}>{t('plugin_quota.bps_estimate_help')}</p>
+-            {estimates.map(({ id, window, estimate }) => (
+-              <div key={id} className={styles.estimate}>
+-                <span className={classes.quotaModel}>{window}</span>
+-                {estimate ? (
+-                  <div className={styles.amounts}>
+-                    <span>
+-                      {t('plugin_quota.bps_estimated_remaining')}{' '}
+-                      <strong>≈ {money.format(estimate.remaining)}</strong>
+-                    </span>
+-                    <span>
+-                      {t('plugin_quota.bps_estimated_total')}{' '}
+-                      <strong>≈ {money.format(estimate.total)}</strong>
+-                    </span>
+-                  </div>
+-                ) : (
+-                  <span className={styles.note}>{t('plugin_quota.bps_estimate_pending')}</span>
+-                )}
+-              </div>
+-            ))}
+-          </>
+-        )}
+-      </QuotaBalanceDetails>
++      <QuotaBalanceDetails balance={balance} unlimited={unlimited} />
+       {quota.groups
+         .filter((group) => group.label !== 'Credits')
+         .map((group) => (
+@@ -147,6 +108,8 @@ export function BpsQuotaBody({
+                 : null;
+               const window = bucket.window || bucket.label;
+               const account = group.label === 'Account usage';
++              const estimate =
++                account && bucket.window ? quota.bpsEstimates?.[bucket.window] : undefined;
+               const label = account
+                 ? window === '7d'
+                   ? t('codex_quota.secondary_window')
+@@ -188,6 +151,18 @@ export function BpsQuotaBody({
+                   >
+                     <QuotaMeter percent={remaining} classes={classes} index={index} />
+                   </div>
++                  {account && (
++                    <div className={styles.amounts} data-bps-estimates="">
++                      <span>
++                        {t('plugin_quota.bps_estimated_remaining')}{' '}
++                        <strong>{estimate ? '≈ ' + money.format(estimate.remaining) : '—'}</strong>
++                      </span>
++                      <span>
++                        {t('plugin_quota.bps_estimated_total')}{' '}
++                        <strong>{estimate ? '≈ ' + money.format(estimate.total) : '—'}</strong>
++                      </span>
++                    </div>
++                  )}
+                 </div>
+               );
+             })}
+diff --git a/src/features/routing/RoutingPage.tsx b/src/features/routing/RoutingPage.tsx
+index 1f60693..10e24ee 100644
+--- a/src/features/routing/RoutingPage.tsx
++++ b/src/features/routing/RoutingPage.tsx
+@@ -6,6 +6,7 @@
+  * so it shows what actually landed, including after a partial failure.
+  */
+ 
++import { CredentialConcurrencyProvider } from '@/components/common/CredentialConcurrency';
+ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+ import { useTranslation } from 'react-i18next';
+ import { AutocompleteInput } from '@/components/ui/AutocompleteInput';
+@@ -357,19 +358,21 @@ export function RoutingPage() {
+     return (
+       <div className={styles.layout} ref={layoutRef}>
+         <section className={styles.board} aria-label={t('routing.title')}>
+-          <TierLadder
+-            members={members}
+-            draft={draft}
+-            preview={preview}
+-            priorities={priorities}
+-            model={selectedModel}
+-            nowMs={nowMs}
+-            theme={resolvedTheme}
+-            entryControl={entryControl}
+-            onMove={handleMove}
+-            onStep={handleStep}
+-            onEditWeights={handleEditWeights}
+-          />
++          <CredentialConcurrencyProvider enabled={connected}>
++            <TierLadder
++              members={members}
++              draft={draft}
++              preview={preview}
++              priorities={priorities}
++              model={selectedModel}
++              nowMs={nowMs}
++              theme={resolvedTheme}
++              entryControl={entryControl}
++              onMove={handleMove}
++              onStep={handleStep}
++              onEditWeights={handleEditWeights}
++            />
++          </CredentialConcurrencyProvider>
+         </section>
+         <PolicyPanel settings={draft.settings} disabled={saving} onChange={handleSettings} />
+       </div>
+diff --git a/src/features/routing/components/MemberCard.tsx b/src/features/routing/components/MemberCard.tsx
+index 4aa58fd..757aa93 100644
+--- a/src/features/routing/components/MemberCard.tsx
++++ b/src/features/routing/components/MemberCard.tsx
+@@ -1,3 +1,4 @@
++import { CredentialConcurrencyLabel } from '@/components/common/CredentialConcurrency';
+ import { ProviderArtwork } from '@/components/common/ProviderArtwork';
+ import { useEffect, useId, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
+ import { useTranslation } from 'react-i18next';
+@@ -215,6 +216,9 @@ export function MemberCard({
+         <span className={styles.name}>{member.name}</span>
+         <span className={styles.kind}>
+           {kindLabel}
++          {member.location.kind === 'credential' ? (
++            <CredentialConcurrencyLabel file={member.location} />
++          ) : null}
+           {showWeight ? (
+             <span className={styles.weight}>
+               {' · '}
+diff --git a/tests/bpsQuota.test.ts b/tests/bpsQuota.test.ts
+index af85b4c..f4d6c83 100644
+--- a/tests/bpsQuota.test.ts
++++ b/tests/bpsQuota.test.ts
+@@ -93,7 +93,7 @@ describe('BPS Codex-style quota presentation', () => {
+     expect(markup).toContain('aria-valuenow="100"');
+     expect(markup).toContain('width:0%');
+     expect(markup).toContain('width:100%');
+-    expect(markup).toContain(chinese.t('plugin_quota.bps_estimate_pending'));
++    expect(markup).toContain('<strong>—</strong>');
+     expect(markup).not.toContain('$0.00');
+   });
+ 
+@@ -120,14 +120,13 @@ describe('BPS Codex-style quota presentation', () => {
+     expect(markup).toContain('raw-estimate-total');
+   });
+ 
+-  test('preserves credits without presenting them as dollars', () => {
++  test('formats a reported balance separately as dollars', () => {
+     const quota = state();
+     quota.summary = [
+       ...summary,
+       { key: 'credits_balance', label: 'Credits balance', value: 40, unit: 'credits' },
+     ];
+     const markup = render(quota);
+-    expect(markup).toContain('40 ' + chinese.t('quota_balance.credit_unit'));
+-    expect(markup).not.toContain('$40.00');
++    expect(markup).toContain('$40.00');
+   });
+ });
+diff --git a/tests/quotaBalanceDetails.test.ts b/tests/quotaBalanceDetails.test.ts
+index f633053..8d0ca50 100644
+--- a/tests/quotaBalanceDetails.test.ts
++++ b/tests/quotaBalanceDetails.test.ts
+@@ -43,7 +43,8 @@ describe('shared BPS and Codex balance details', () => {
+       expect(html).toContain('<details');
+       expect(html).toContain('data-quota-balance');
+       expect(html).toContain('查看余额');
+-      expect(html).toContain('上游未返回积分余额，不代表余额为零。');
++      expect(html).toContain('未提供');
++      expect(html).not.toMatch(/<p[ >]/);
+       expect(html).not.toContain(' open');
+       expect(html).not.toContain('$0.00');
+     }
+@@ -55,14 +56,14 @@ describe('shared BPS and Codex balance details', () => {
+         summary: [{ key: 'credits_balance', label: 'Credits', value: 0, unit: 'credits' }],
+       }),
+     ]) {
+-      expect(html).toContain('0 Credits');
++      expect(html).toContain('$0.00');
+       expect(html).not.toContain('未提供');
+     }
+   });
+-  test('Codex preserves decimal credit precision without inventing a dollar conversion', () => {
++  test('Codex formats decimal balances as dollars', () => {
+     const html = renderCodex({ creditBalance: '12.50' });
+-    expect(html).toContain('12.50 Credits');
+-    expect(html).not.toContain('$12.50');
++    expect(html).toContain('$12.50');
++    expect(html).not.toContain('12.50 Credits');
+   });
+   test('BPS preserves upstream unlimited credits through localized group normalization', () => {
+     const groups = buildBpsQuotaGroups(
+@@ -101,8 +102,11 @@ describe('shared BPS and Codex balance details', () => {
+     expect(html).toContain('周限额');
+     expect(html).toContain('aria-valuenow="26"');
+     expect(html).toContain('quotaBarFillLow');
+-    expect(html).toContain('估算 ≈ $116.75');
+-    expect(html).toContain('上游未返回积分余额');
++    expect(html).toContain('估算剩余');
++    expect(html).toContain('≈ $116.75');
++    expect(html).toContain('估算总额');
++    expect(html).toContain('≈ $449.03');
++    expect(html.indexOf('</details>')).toBeLessThan(html.indexOf('data-bps-estimates'));
+     expect(html).not.toContain('116.75 Credits');
+   });
+   test('multiple overlapping window estimates are listed separately, never added together', () => {
+diff --git a/tests/quotaBodyRendering.test.ts b/tests/quotaBodyRendering.test.ts
+index aea4a2f..0c91f68 100644
+--- a/tests/quotaBodyRendering.test.ts
++++ b/tests/quotaBodyRendering.test.ts
+@@ -113,7 +113,13 @@ describe('CodexQuotaBody', () => {
+           createElement(CodexQuotaBody, { quota: { ...quota, creditBalance: '0' }, classes })
+         );
+         expect(balance).toContain(i18n.t('quota_balance.label'));
+-        expect(balance).toContain('0 ' + i18n.t('quota_balance.credit_unit'));
++        expect(balance).toContain(
++          new Intl.NumberFormat(language, {
++            style: 'currency',
++            currency: 'USD',
++            currencyDisplay: 'narrowSymbol',
++          }).format(0)
++        );
+         expect(balance).toContain('data-quota-balance');
+         const infinite = renderToStaticMarkup(
+           createElement(CodexQuotaBody, {
+@@ -124,7 +130,7 @@ describe('CodexQuotaBody', () => {
+         expect(infinite).toContain(i18n.t('quota_balance.label'));
+         expect(infinite).toContain(unlimited);
+         const absent = renderToStaticMarkup(createElement(CodexQuotaBody, { quota, classes }));
+-        expect(absent).toContain(i18n.t('quota_balance.not_returned'));
++        expect(absent).toContain(i18n.t('quota_balance.unavailable'));
+         expect(absent).toContain('data-quota-balance');
+       } finally {
+         await i18n.changeLanguage('en');

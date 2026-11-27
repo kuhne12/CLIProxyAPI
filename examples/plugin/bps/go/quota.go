@@ -69,10 +69,12 @@ func fetchBPSQuota(req quotaFetchRequest, call func(string, []byte) ([]byte, err
 			return empty, fmt.Errorf("BPS quota query failed (HTTP %d)", upstream.StatusCode)
 		}
 	}
-	quota, errNormalize := normalizeBPSQuota(upstream.Body, upstream.Headers, time.Now())
+	observedAt := time.Now()
+	quota, errNormalize := normalizeBPSQuota(upstream.Body, upstream.Headers, observedAt)
 	if errNormalize != nil {
 		return empty, errNormalize
 	}
+	quota.ObservedAt = observedAt.UTC().Format(time.RFC3339Nano)
 	// Credit details may be newer than the usage snapshot. Failure must not hide
 	// usable quota windows or replace a known inline count with zero.
 	if count, ok := fetchBPSResetCredits(req.HostCallbackID, headers, call); ok {

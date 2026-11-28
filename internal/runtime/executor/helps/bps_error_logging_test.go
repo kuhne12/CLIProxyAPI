@@ -71,7 +71,11 @@ func TestBPSUpstreamErrorLogPreservesOriginalLimits(t *testing.T) {
 					t.Fatal("private output leaked or source event was mutated")
 				}
 				var public *pluginabi.Error
-				if !errors.As(bpsbridge.EventError(raw), &public) || public.HTTPStatus != 429 || public.Code != pluginabi.ErrorCodeTransientRateLimit || public.Message != "Service is temporarily rate limited; retry later" || strings.Contains(public.Message, message) {
+				wantCode := pluginabi.ErrorCodeTransientRateLimit
+				if code == "rate_limit_exceeded" {
+					wantCode = pluginabi.ErrorCodeBPSRateLimit
+				}
+				if !errors.As(bpsbridge.EventError(raw), &public) || public.HTTPStatus != 429 || public.Code != wantCode || public.Message != "Service is temporarily rate limited; retry later" || strings.Contains(public.Message, message) {
 					t.Fatalf("public rate-limit contract changed: %v", public)
 				}
 				if _, retained := observation.fields()["upstream_error_payload"]; retained {

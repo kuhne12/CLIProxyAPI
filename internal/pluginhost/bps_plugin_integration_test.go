@@ -38,7 +38,7 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 	}
 	t.Chdir(dir)
 	host := New()
-	client, errOpen := (dynamicLibraryLoader{}).Open(pluginFile{ID: "bps", Path: pluginPath, Version: "0.5.8"}, host)
+	client, errOpen := (dynamicLibraryLoader{}).Open(pluginFile{ID: "bps", Path: pluginPath, Version: "0.5.10"}, host)
 	if errOpen != nil {
 		t.Fatal(errOpen)
 	}
@@ -47,9 +47,12 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 	if errRegister != nil {
 		t.Fatal(errRegister)
 	}
-	fields := plugin.Metadata.ConfigFields
-	if plugin.Metadata.Version != "0.5.8" || len(fields) != 3 || fields[0].Name != "cache-creation-as-input" || fields[0].Type != pluginapi.ConfigFieldTypeBoolean || fields[0].Default != false || fields[1].Name != "quota-model-prices" || fields[1].Type != pluginapi.ConfigFieldTypeObject || fields[2].Name != "image-relay-origin" || fields[2].Type != pluginapi.ConfigFieldTypeString {
-		t.Fatal("BPS downstream accounting configuration unavailable across C ABI")
+	fields := make(map[string]pluginapi.ConfigField)
+	for _, field := range plugin.Metadata.ConfigFields {
+		fields[field.Name] = field
+	}
+	if plugin.Metadata.Version != "0.5.10" || fields["cache-creation-as-input"].Type != pluginapi.ConfigFieldTypeBoolean || fields["cache-creation-as-input"].Default != false || fields["quota-model-prices"].Type != pluginapi.ConfigFieldTypeObject || fields["image-relay-origin"].Type != pluginapi.ConfigFieldTypeString || fields["rate-limit-cooldown-enabled"].Type != pluginapi.ConfigFieldTypeBoolean || fields["rate-limit-cooldown-threshold"].Name == "" || fields["rate-limit-cooldown-seconds"].Name == "" || fields["force-ultrafast"].Type != pluginapi.ConfigFieldTypeBoolean {
+		t.Fatal("BPS settings configuration unavailable across C ABI")
 	}
 	if plugin.Capabilities.AuthProvider == nil || plugin.Capabilities.AuthProvider.Identifier() != "bps" || plugin.Capabilities.CommandLinePlugin == nil {
 		t.Fatal("BPS capabilities unavailable across C ABI")
@@ -59,7 +62,8 @@ func TestBPSSharedLibraryImportsAndPersistsIndependentGrant(t *testing.T) {
 	page := httptest.NewRecorder()
 	if !host.ServeResourceHTTP(page, httptest.NewRequest(http.MethodGet, "/v0/resource/plugins/bps/settings", nil)) ||
 		page.Code != http.StatusOK || !strings.HasPrefix(page.Header().Get("Content-Type"), "text/html") ||
-		!strings.Contains(page.Body.String(), "<title>BPS 设置</title>") {
+		!strings.Contains(page.Body.String(), "<title>BPS 设置</title>") ||
+		!strings.Contains(page.Body.String(), "cooldown-threshold") || !strings.Contains(page.Body.String(), "ultrafast-mode") {
 		t.Fatal("BPS settings page unavailable across C ABI")
 	}
 	if plugin.Capabilities.QuotaProvider == nil || !host.HasQuotaProvider("bps") || plugin.Capabilities.UsagePlugin == nil {

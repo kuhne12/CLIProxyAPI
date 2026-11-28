@@ -21,9 +21,10 @@ git -C "$source_dir" apply --check "$root/credential-concurrency.patch"
 git -C "$source_dir" apply "$root/credential-concurrency.patch"
 git -C "$source_dir" apply --check "$root/bps-live-balance.patch"
 git -C "$source_dir" apply "$root/bps-live-balance.patch"
+git -C "$source_dir" apply "$root/bps-cooldown.patch"
 cd "$source_dir"
 bun=${BUN:-bun}
 test "$("$bun" --version)" = 1.4.3
 "$bun" install --frozen-lockfile
-VERSION=bps-v0.5.8 "$bun" run verify
+VERSION=bps-v0.5.10 "$bun" run verify
 install -m 644 dist/index.html "$output"

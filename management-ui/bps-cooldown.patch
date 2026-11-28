@@ -1,0 +1,130 @@
+diff --git a/src/components/common/CredentialConcurrency.tsx b/src/components/common/CredentialConcurrency.tsx
+index e37ac7c..fe2a759 100644
+--- a/src/components/common/CredentialConcurrency.tsx
++++ b/src/components/common/CredentialConcurrency.tsx
+@@ -4,7 +4,13 @@ import { apiClient } from '@/services/api/client';
+ import type { AuthFileItem } from '@/types';
+ import styles from './CredentialConcurrency.module.scss';
+ 
+-type Row = { id: string; auth_index: string; current: number; limit: number };
++type Row = {
++  id: string;
++  auth_index: string;
++  current: number;
++  limit: number;
++  bps_cooldown_until?: string;
++};
+ const Concurrency = createContext<Map<string, Row> | null>(null);
+ 
+ export function CredentialConcurrencyProvider({
+@@ -72,11 +78,22 @@ export function CredentialConcurrencyLabel({
+   file: Pick<AuthFileItem, 'name' | 'authIndex'>;
+ }) {
+   const rows = useContext(Concurrency);
+-  const { t } = useTranslation();
++  const { t, i18n } = useTranslation();
+   const row = rows?.get('index:' + file.authIndex) ?? rows?.get('id:' + file.name);
++  const until = row?.bps_cooldown_until ? new Date(row.bps_cooldown_until) : undefined;
++  const clock =
++    until && Number.isFinite(until.getTime()) ? until.toLocaleString(i18n.resolvedLanguage) : '';
+   return (
+-    <small className={styles.badge} data-concurrency={getConcurrencyLevel(row)}>
+-      {t('auth_files.concurrency')} {row ? row.current + '/' + (row.limit || '∞') : '—'}
+-    </small>
++    <>
++      <small className={styles.badge} data-concurrency={getConcurrencyLevel(row)}>
++        {t('auth_files.concurrency')} {row ? row.current + '/' + (row.limit || '∞') : '—'}
++      </small>
++      {clock && until && (
++        <small className={styles.badge} data-concurrency="full">
++          {t('auth_files.bps_cooling_until', 'BPS cooldown until')}{' '}
++          <time dateTime={until.toISOString()}>{clock}</time>
++        </small>
++      )}
++    </>
+   );
+ }
+diff --git a/src/i18n/locales/en.json b/src/i18n/locales/en.json
+index c9d9f05..ff775ce 100644
+--- a/src/i18n/locales/en.json
++++ b/src/i18n/locales/en.json
+@@ -211,6 +211,7 @@
+     "routing_strategy_fill_first": "fill-first (prioritize)"
+   },
+   "auth_files": {
++    "bps_cooling_until": "BPS cooldown until",
+     "concurrency": "Concurrency",
+     "concurrency_limit": "Concurrency limit",
+     "concurrency_hint": "Leave empty to use the default. BPS supports 1–4 per credential.",
+diff --git a/src/i18n/locales/ko.json b/src/i18n/locales/ko.json
+index 0d72549..f449b41 100644
+--- a/src/i18n/locales/ko.json
++++ b/src/i18n/locales/ko.json
+@@ -211,6 +211,7 @@
+     "routing_strategy_fill_first": "fill-first (우선 채우기)"
+   },
+   "auth_files": {
++    "bps_cooling_until": "BPS 계정 재사용 가능:",
+     "concurrency": "동시 요청",
+     "concurrency_limit": "동시 요청 한도",
+     "concurrency_hint": "기본값을 사용하려면 비워 두세요. BPS는 인증 정보당 1–4개를 지원합니다.",
+diff --git a/src/i18n/locales/ru.json b/src/i18n/locales/ru.json
+index 8ea10d8..be78c2b 100644
+--- a/src/i18n/locales/ru.json
++++ b/src/i18n/locales/ru.json
+@@ -211,6 +211,7 @@
+     "routing_strategy_fill_first": "fill-first (приоритет)"
+   },
+   "auth_files": {
++    "bps_cooling_until": "Пауза BPS до",
+     "concurrency": "Одновременные запросы",
+     "concurrency_limit": "Лимит одновременных запросов",
+     "concurrency_hint": "Оставьте пустым для значения по умолчанию. BPS допускает 1–4 запроса на учётные данные.",
+diff --git a/src/i18n/locales/tr.json b/src/i18n/locales/tr.json
+index 59dec39..9982406 100644
+--- a/src/i18n/locales/tr.json
++++ b/src/i18n/locales/tr.json
+@@ -211,6 +211,7 @@
+     "routing_strategy_fill_first": "Fill-First (Önceliklendir)"
+   },
+   "auth_files": {
++    "bps_cooling_until": "BPS hesabı tarihine kadar beklemede",
+     "concurrency": "Eşzamanlı",
+     "concurrency_limit": "Eşzamanlı istek sınırı",
+     "concurrency_hint": "Varsayılan için boş bırakın. BPS her kimlik bilgisi için 1–4 isteği destekler.",
+diff --git a/src/i18n/locales/vi.json b/src/i18n/locales/vi.json
+index 602f7cb..9b4c2a0 100644
+--- a/src/i18n/locales/vi.json
++++ b/src/i18n/locales/vi.json
+@@ -211,6 +211,7 @@
+     "routing_strategy_fill_first": "fill-first (ưu tiên lấp đầy)"
+   },
+   "auth_files": {
++    "bps_cooling_until": "BPS tạm nghỉ đến",
+     "concurrency": "Đồng thời",
+     "concurrency_limit": "Giới hạn đồng thời",
+     "concurrency_hint": "Để trống để dùng mặc định. BPS hỗ trợ 1–4 cho mỗi thông tin xác thực.",
+diff --git a/src/i18n/locales/zh-CN.json b/src/i18n/locales/zh-CN.json
+index 85dc861..c4297ab 100644
+--- a/src/i18n/locales/zh-CN.json
++++ b/src/i18n/locales/zh-CN.json
+@@ -211,6 +211,7 @@
+     "routing_strategy_fill_first": "fill-first（优先填满）"
+   },
+   "auth_files": {
++    "bps_cooling_until": "账号冷却至",
+     "concurrency": "并发",
+     "concurrency_limit": "并发上限",
+     "concurrency_hint": "留空使用默认值。BPS 单凭据支持 1–4。",
+diff --git a/src/i18n/locales/zh-TW.json b/src/i18n/locales/zh-TW.json
+index f861c3c..f8c6f09 100644
+--- a/src/i18n/locales/zh-TW.json
++++ b/src/i18n/locales/zh-TW.json
+@@ -211,6 +211,7 @@
+     "routing_strategy_fill_first": "fill-first（優先填滿）"
+   },
+   "auth_files": {
++    "bps_cooling_until": "BPS 帳號冷卻至",
+     "concurrency": "並行",
+     "concurrency_limit": "並行上限",
+     "concurrency_hint": "留空使用預設值。BPS 單憑證支援 1–4。",

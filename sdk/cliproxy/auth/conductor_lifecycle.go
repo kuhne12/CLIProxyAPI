@@ -541,6 +541,11 @@ func (m *Manager) updateInternalLockedWithOptions(ctx context.Context, base, aut
 	} else {
 		auth.CredentialVersion = existingVersion
 	}
+	// An auth refresh or a same-credential file update must not restore stale cooldown state.
+	auth.bpsRateLimit = bpsRateLimitState{}
+	if (!credChanged || mode == updateModeRefresh) && !existing.Disabled && existing.Status != StatusDisabled && !auth.Disabled && auth.Status != StatusDisabled {
+		auth.bpsRateLimit = existing.bpsRateLimit
+	}
 	cooldownStateChanged := false
 	now := time.Now()
 	if !existing.Disabled && existing.Status != StatusDisabled && !auth.Disabled && auth.Status != StatusDisabled {

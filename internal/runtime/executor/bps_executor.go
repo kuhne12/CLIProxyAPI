@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -253,9 +254,15 @@ func (e *BPSExecutor) open(ctx context.Context, auth *coreauth.Auth, req coreexe
 	if management := ojson.GetBytes(req.Payload, "context_management"); management.IsArray() {
 		_ = doc.SetRaw("context_management", management.Raw)
 	}
+	// Codex normalizes tiers for its own endpoint. BPS must preserve the caller's
+	// explicit tier before applying the credential policy and final user rules.
+	if tier := ojson.GetBytes(req.Payload, "service_tier"); tier.Type == ojson.String && strings.TrimSpace(tier.String()) != "" {
+		_ = doc.Set("service_tier", strings.ToLower(strings.TrimSpace(tier.String())))
+	}
 	// Default rules must recognize the caller's restored fields as explicit.
 	original := doc.Bytes()
 	_ = doc.Set("model", nativeModel)
+	helps.ApplyBPSServiceTierDoc(doc, e.cfg, auth)
 	if errThinking := helps.ApplyBPSRequestThinkingDoc(doc, req, opts, from.String(), modelInfo, translated.ConfigurationUpdatesChanged); errThinking != nil {
 		return nil, nil, errThinking
 	}

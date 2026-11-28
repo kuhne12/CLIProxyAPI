@@ -1309,8 +1309,7 @@ func isAuthBlockedForModelForRequest(ctx context.Context, auth *Auth, model stri
 		}
 		return true, blockReasonCooldown, credNext
 	}
-	if !auth.credentialRetryAfter.IsZero() && auth.credentialRetryAfter.After(now) {
-		credNext := auth.credentialRetryAfter
+	if credNext := auth.credentialRoutingRetryAfter(); credNext.After(now) {
 		if model != "" && len(auth.ModelStates) > 0 {
 			modelKey := canonicalModelLookupKey(model)
 			for stateModel, state := range auth.ModelStates {
@@ -1325,6 +1324,9 @@ func isAuthBlockedForModelForRequest(ctx context.Context, auth *Auth, model stri
 					credNext = next
 				}
 			}
+		}
+		if auth.bpsRateLimit.until.After(now) && !auth.credentialRetryAfter.After(now) {
+			return true, blockReasonCooldown, credNext
 		}
 		return true, blockReasonOther, credNext
 	}

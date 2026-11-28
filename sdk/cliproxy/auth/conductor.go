@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/bpsconfig"
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
@@ -248,6 +249,8 @@ type Manager struct {
 
 	// modelPoolOffsets tracks per-auth alias pool rotation state.
 	modelPoolOffsets map[string]int
+
+	bpsRateLimitPolicy bpsconfig.RateLimitCooldown
 
 	// runtimeConfig stores the latest application config for request-time decisions.
 	// It is initialized in NewManager; never Load() before first Store().

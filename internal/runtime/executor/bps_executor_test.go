@@ -268,7 +268,7 @@ func TestBPSExecutorReportsLimitsAndDoesNotReplay(t *testing.T) {
 			_, err = e.Execute(t.Context(), bpsFixtureAuth(), req, opts)
 		}
 		var failure *pluginabi.Error
-		if !errors.As(err, &failure) || failure.HTTPStatus != 429 || failure.Code != pluginabi.ErrorCodeTransientRateLimit || strings.Contains(err.Error(), "fixture-token") {
+		if !errors.As(err, &failure) || failure.HTTPStatus != 429 || failure.Code != pluginabi.ErrorCodeBPSRateLimit || strings.Contains(err.Error(), "fixture-token") {
 			t.Fatalf("limit was lost or leaked: %v", err)
 		}
 		if count.Load() != 1 {

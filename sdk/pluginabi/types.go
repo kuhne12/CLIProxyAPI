@@ -170,6 +170,8 @@ const (
 	// capacity/admission limit that cools only the reporting model until
 	// RetryAfterSeconds without recording quota exhaustion or advancing backoff.
 	ErrorCodeTransientRateLimit = "transient_rate_limit"
+	// ErrorCodeBPSRateLimit identifies an explicit upstream BPS rate_limit_exceeded event.
+	ErrorCodeBPSRateLimit = "bps_upstream_rate_limit"
 	// ErrorCodeRequestScoped marks a failure as caused by the request itself:
 	// CPA skips credential/model cooldown and stops credential rotation.
 	ErrorCodeRequestScoped = "request_scoped"
@@ -304,7 +306,8 @@ func (e *Error) IsTransientRateLimit() bool {
 	if e == nil || e.IsCredentialScoped() {
 		return false
 	}
-	return strings.EqualFold(strings.TrimSpace(e.Code), ErrorCodeTransientRateLimit)
+	code := strings.TrimSpace(e.Code)
+	return strings.EqualFold(code, ErrorCodeTransientRateLimit) || strings.EqualFold(code, ErrorCodeBPSRateLimit)
 }
 
 // IsStreamTruncated reports whether the Error represents a truncated accepted upstream stream.

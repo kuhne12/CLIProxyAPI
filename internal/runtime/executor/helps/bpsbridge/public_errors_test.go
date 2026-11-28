@@ -19,7 +19,8 @@ func TestEventErrorUsesProviderNeutralMessages(t *testing.T) {
 		retryAfter int
 	}{
 		{[]string{"invalid_encrypted_content"}, 400, pluginabi.ErrorCodeRequestScoped, "Encrypted conversation content could not be validated; start a new delegation with valid history", false, 0},
-		{[]string{"rate_limit_exceeded", "too_many_requests", "concurrent_request_limit"}, 429, pluginabi.ErrorCodeTransientRateLimit, "Service is temporarily rate limited; retry later", false, 1},
+		{[]string{"rate_limit_exceeded"}, 429, pluginabi.ErrorCodeBPSRateLimit, "Service is temporarily rate limited; retry later", false, 1},
+		{[]string{"too_many_requests", "concurrent_request_limit"}, 429, pluginabi.ErrorCodeTransientRateLimit, "Service is temporarily rate limited; retry later", false, 1},
 		{[]string{"insufficient_quota", "usage_limit_reached", "quota_exceeded"}, 429, pluginabi.ErrorCodeCredentialQuota, "Upstream account quota is exhausted", true, 0},
 		{[]string{"invalid_api_key", "invalid_token", "token_expired", "unauthorized"}, 401, "bps_auth_unavailable", "Upstream authorization is no longer valid; refresh or sign in again", false, 0},
 		{[]string{"model_not_found", "model_not_available", "unsupported_model"}, 404, pluginabi.ErrorCodeModelNotFound, "This model is unavailable for the configured credential", false, 0},

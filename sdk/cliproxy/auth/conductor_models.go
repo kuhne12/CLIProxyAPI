@@ -349,11 +349,11 @@ func (m *Manager) clientModelProjectionForAuth(auth *Auth, routeModel string, no
 		credRetrySuspended = true
 		credRetryUntil = authForce
 	}
-	if !auth.credentialRetryAfter.IsZero() && auth.credentialRetryAfter.After(now) {
+	if until := auth.credentialRoutingRetryAfter(); until.After(now) {
 		isSuspended = true
 		credRetrySuspended = true
-		if auth.credentialRetryAfter.After(credRetryUntil) {
-			credRetryUntil = auth.credentialRetryAfter
+		if until.After(credRetryUntil) {
+			credRetryUntil = until
 		}
 	}
 

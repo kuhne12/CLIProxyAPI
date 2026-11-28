@@ -25,6 +25,7 @@ type quotaModelPrice struct {
 	CacheWrite  *float64 `yaml:"cache-write"`
 	Priority    *float64 `yaml:"priority-multiplier"`
 	Flex        *float64 `yaml:"flex-multiplier"`
+	UltraFast   *float64 `yaml:"ultrafast-multiplier" json:"UltraFast,omitempty"`
 	LongContext int64    `yaml:"long-context-threshold"`
 	LongInput   *float64 `yaml:"long-context-input-multiplier"`
 	LongOutput  *float64 `yaml:"long-context-output-multiplier"`
@@ -102,7 +103,7 @@ func (e *bpsQuotaEstimator) configure(raw []byte, reset bool) error {
 		if strings.TrimSpace(model) != model || model == "" || price.Input == nil || price.Output == nil || price.LongContext < 0 {
 			return errors.New("BPS quota prices require an exact model ID, input and output prices, and a nonnegative context threshold")
 		}
-		for _, value := range []*float64{price.Input, price.Output, price.CacheRead, price.CacheWrite, price.Priority, price.Flex, price.LongInput, price.LongOutput} {
+		for _, value := range []*float64{price.Input, price.Output, price.CacheRead, price.CacheWrite, price.Priority, price.Flex, price.UltraFast, price.LongInput, price.LongOutput} {
 			if value != nil && (!finiteQuotaValue(*value) || *value > 1e9) {
 				return errors.New("BPS quota prices and multipliers must be finite nonnegative numbers")
 			}
@@ -280,6 +281,11 @@ func quotaUsageCost(record pluginapi.UsageRecord, cfg quotaEstimateConfig) (floa
 			return 0, false
 		}
 		multiplier = *price.Priority
+	case "ultrafast":
+		if price.UltraFast == nil {
+			return 0, false
+		}
+		multiplier = *price.UltraFast
 	case "flex":
 		if price.Flex == nil {
 			return 0, false

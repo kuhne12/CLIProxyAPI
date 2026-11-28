@@ -364,6 +364,11 @@ func PrepareWithOptions(raw []byte, scope string, replay *ReplayCache, options P
 	if cacheKey != "" {
 		output["prompt_cache_key"] = "bps-" + fingerprint([]any{scope, cacheKey})
 	}
+	// Preserve the requested service tier; upstream entitlement is authoritative.
+	// Never retry with a slower tier if the selected tier is rejected.
+	if tier := strings.ToLower(strings.TrimSpace(text(source["service_tier"]))); tier != "" {
+		output["service_tier"] = tier
+	}
 	if management, ok := source["context_management"].([]any); ok {
 		output["context_management"] = management
 	}

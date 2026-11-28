@@ -1036,7 +1036,7 @@ func isCredentialBlocked(auth *Auth, supportedModelCount int, now time.Time) boo
 	if effectiveAuthForceUntil(auth).After(now) && auth.NextRetryAfter.After(now) {
 		return true
 	}
-	if !auth.credentialRetryAfter.IsZero() && auth.credentialRetryAfter.After(now) {
+	if auth.credentialRoutingRetryAfter().After(now) {
 		return true
 	}
 	if len(auth.ModelStates) == 0 {

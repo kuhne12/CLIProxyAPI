@@ -17,9 +17,11 @@ import (
 
 	"github.com/MoeForge/moego/json"
 	"github.com/router-for-me/CLIProxyAPI/v8/examples/plugin/bps/go/internal/bpsauth"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/bpsconfig"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 	log "github.com/sirupsen/logrus"
+	"gopkg.in/yaml.v3"
 )
 
 var provider atomic.Pointer[bpsauth.Provider]
@@ -39,6 +41,9 @@ func handleMethod(method string, raw []byte) ([]byte, error) {
 	authProvider := provider.Load()
 	switch method {
 	case pluginabi.MethodPluginRegister, pluginabi.MethodPluginReconfigure:
+		if errConfig := validateBPSSettings(raw); errConfig != nil {
+			return nil, errConfig
+		}
 		if errConfig := quotaEstimator.configure(raw, method == pluginabi.MethodPluginRegister); errConfig != nil {
 			return nil, errConfig
 		}
@@ -49,13 +54,28 @@ func handleMethod(method string, raw []byte) ([]byte, error) {
 		}
 		return okEnvelope(map[string]any{
 			"schema_version": pluginabi.SchemaVersion,
-			"metadata": pluginapi.Metadata{Name: "bps", Version: "0.5.8", Author: "CLIProxyAPI contributors",
+			"metadata": pluginapi.Metadata{Name: "bps", Version: "0.5.10", Author: "CLIProxyAPI contributors",
 				GitHubRepository: "https://github.com/router-for-me/CLIProxyAPI", ConfigFields: []pluginapi.ConfigField{{
+					Name: "force-ultrafast", Type: pluginapi.ConfigFieldTypeBoolean, Default: false,
+					Description: "Force service_tier=ultrafast for every BPS credential. Otherwise only force-ultrafast-auth-ids are forced. Requires the matching CPA executor; explicit administrator payload rules take precedence. Upstream may reject unsupported tiers; no automatic downgrade.",
+				}, {
+					Name: "force-ultrafast-auth-ids", Type: pluginapi.ConfigFieldTypeArray, Default: []string{},
+					Description: "Exact BPS credential IDs or filenames to force to ultrafast when the global switch is off. An empty list leaves the caller tier unchanged.",
+				}, {
+					Name: "rate-limit-cooldown-enabled", Type: pluginapi.ConfigFieldTypeBoolean, Default: false,
+					Description: "Pause routing to a BPS credential after consecutive upstream rate-limit responses.",
+				}, {
+					Name: "rate-limit-cooldown-seconds", Type: pluginapi.ConfigFieldTypeInteger, Default: bpsconfig.DefaultCooldownSeconds,
+					Description: "Duration of the BPS account cooldown in seconds.",
+				}, {
+					Name: "rate-limit-cooldown-threshold", Type: pluginapi.ConfigFieldTypeInteger, Default: bpsconfig.DefaultCooldownThreshold,
+					Description: "Number of consecutive upstream 429 rate-limit responses required for one BPS credential.",
+				}, {
 					Name: "cache-creation-as-input", Type: pluginapi.ConfigFieldTypeBoolean, Default: false,
 					Description: "Report BPS cache creation as regular input to downstream clients. Total input and cache reads stay unchanged; CPA retains original upstream usage. Requires the matching CPA BPS executor.",
 				}, {
 					Name: "quota-model-prices", Type: pluginapi.ConfigFieldTypeObject, Default: map[string]any{},
-					Description: "USD per million tokens by exact model ID: input, output, cache-read, cache-write; optional priority-multiplier, flex-multiplier, long-context-threshold, long-context-input-multiplier, long-context-output-multiplier. Estimates quota value from priced usage since each reset and the current used percentage. Cost history, hashed deduplication IDs and quota snapshots survive restart. Automatic refresh runs every minute with the matching CPA server.",
+					Description: "USD per million tokens by exact model ID: input, output, cache-read, cache-write; optional priority-multiplier, flex-multiplier, ultrafast-multiplier, long-context-threshold, long-context-input-multiplier, long-context-output-multiplier. Estimates quota value from priced usage since each reset and the current used percentage. Cost history, hashed deduplication IDs and quota snapshots survive restart. Automatic refresh runs every minute with the matching CPA server.",
 				}, {
 					Name: "image-relay-origin", Type: pluginapi.ConfigFieldTypeString, Default: "",
 					Description: "Public HTTPS origin pointing to this CPA server (no path), for example https://cpa.example.com. Inline PNG/JPEG/GIF/WebP images are served through signed temporary URLs for at most 10 minutes. Empty keeps HTTPS-only image input. Requires the matching CPA executor.",
@@ -64,7 +84,7 @@ func handleMethod(method string, raw []byte) ([]byte, error) {
 		})
 	case pluginabi.MethodManagementRegister:
 		return okEnvelope(pluginapi.ManagementRegistrationResponse{Resources: []pluginapi.ResourceRoute{{
-			Path: settingsPath, Menu: "BPS 设置", Description: "缓存计量、图片中转与模型价格",
+			Path: settingsPath, Menu: "BPS 设置", Description: "账号冷却、Ultrafast、缓存计量、图片中转与模型价格",
 		}}})
 	case pluginabi.MethodManagementHandle:
 		return dispatch(raw, serveSettings)
@@ -143,6 +163,24 @@ func dispatch[Request, Response any](raw []byte, invoke func(Request) (Response,
 		return nil, err
 	}
 	return okEnvelope(response)
+}
+
+func validateBPSSettings(raw []byte) error {
+	var req struct {
+		ConfigYAML []byte `json:"config_yaml"`
+	}
+	if len(raw) > 0 && json.Unmarshal(raw, &req) != nil {
+		return errors.New("invalid BPS plugin configuration request")
+	}
+	var cfg bpsconfig.ServiceTier
+	if len(req.ConfigYAML) > 0 && yaml.Unmarshal(req.ConfigYAML, &cfg) != nil {
+		return errors.New("invalid BPS ultra fast configuration")
+	}
+	if errValidate := cfg.Validate(); errValidate != nil {
+		return errValidate
+	}
+	_, errCooldown := bpsconfig.ParseRateLimitCooldown(req.ConfigYAML)
+	return errCooldown
 }
 
 func okEnvelope(value any) ([]byte, error) {

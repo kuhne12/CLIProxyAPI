@@ -53,6 +53,7 @@ func GetRequestInfo(ctx context.Context) *RequestInfo {
 
 // Auth encapsulates the runtime state and metadata associated with a single credential.
 type Auth struct {
+	bpsRateLimit bpsRateLimitState
 	// ID uniquely identifies the auth record across restarts.
 	ID string `json:"id"`
 	// RegistrationEpoch tracks monotonic registration cycles across unregister/re-register.

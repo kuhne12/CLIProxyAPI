@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/MoeForge/moego/json"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -104,6 +105,9 @@ func (m *Manager) acquireGeneration(ctx context.Context, provider string, auth *
 		if registered := m.auths[id]; registered != nil {
 			current = registered
 		}
+		if current != nil && current.bpsRateLimit.until.After(time.Now()) {
+			return nil, &Error{Code: bpsAccountCoolingCode, Message: "BPS credential is cooling down", HTTPStatus: http.StatusTooManyRequests, Retryable: true}
+		}
 		fileLimit := credentialLimit(current, provider)
 		cfg, _ := m.runtimeConfig.Load().(*config.Config)
 		channelLimit := providerLimit(cfg, provider)
@@ -148,17 +152,19 @@ func decrementGenerationCount(counts map[string]int, key string) {
 
 // CredentialConcurrency reports only fields intended for authenticated management views.
 type CredentialConcurrency struct {
-	ID      string `json:"id"`
-	Index   string `json:"auth_index"`
-	Current int    `json:"current"`
-	Limit   int    `json:"limit"`
-	Email   string `json:"email,omitempty"`
+	ID            string     `json:"id"`
+	Index         string     `json:"auth_index"`
+	Current       int        `json:"current"`
+	Limit         int        `json:"limit"`
+	CooldownUntil *time.Time `json:"bps_cooldown_until,omitempty"`
+	Email         string     `json:"email,omitempty"`
 }
 
 func (m *Manager) CredentialConcurrency() []CredentialConcurrency {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	rows := make([]CredentialConcurrency, 0, len(m.auths))
+	now := time.Now()
 	for id, auth := range m.auths {
 		if auth == nil {
 			continue
@@ -175,7 +181,11 @@ func (m *Manager) CredentialConcurrency() []CredentialConcurrency {
 				email = account
 			}
 		}
-		rows = append(rows, CredentialConcurrency{ID: id, Index: auth.Index, Current: m.generations.active[id], Limit: credentialLimit(auth, auth.Provider), Email: strings.TrimSpace(email)})
+		row := CredentialConcurrency{ID: id, Index: auth.Index, Current: m.generations.active[id], Limit: credentialLimit(auth, auth.Provider), Email: strings.TrimSpace(email)}
+		if until := auth.bpsRateLimit.until; until.After(now) && !auth.Disabled && auth.Status != StatusDisabled {
+			row.CooldownUntil = &until
+		}
+		rows = append(rows, row)
 	}
 	return rows
 }

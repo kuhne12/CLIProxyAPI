@@ -103,11 +103,13 @@
         gap: 10px;
       }
       input,
+      select,
       button {
         font: inherit;
         color: inherit;
       }
-      input:not([type="checkbox"]) {
+      input:not([type="checkbox"]),
+      select {
         width: 100%;
         min-width: 0;
         border: 1px solid var(--line);
@@ -175,6 +177,13 @@
         display: block;
         font-variant-numeric: tabular-nums;
       }
+      .account {
+        padding: 10px 0;
+        overflow-wrap: anywhere;
+        font-weight: 400;
+      }
+      .account input { flex-shrink: 0; }
+      #ultrafast-accounts { max-height: 340px; overflow-y: auto; margin-top: 8px; }
       #prices {
         margin-top: 18px;
       }
@@ -243,6 +252,38 @@
       </form>
       <fieldset id="settings" hidden>
         <section class="card">
+          <h2>账号限流冷却</h2>
+          <form id="cooldown-form">
+            <label class="toggle"><input id="cooldown-enabled" type="checkbox" />启用 BPS 账号冷却</label>
+            <div class="grid setting">
+              <label>连续 429 次数<input id="cooldown-threshold" type="number" min="1" max="100" step="1" value="3" required /></label>
+              <label>冷却时长（秒）<input id="cooldown-seconds" type="number" min="1" max="86400" step="1" value="60" required /></label>
+            </div>
+            <small>同一账号连续收到上游限流达到阈值后，暂停该账号的所有模型路由。冷却到期自动恢复。</small>
+            <footer><button class="primary">保存冷却设置</button></footer>
+          </form>
+        </section>
+        <section class="card">
+          <h2>强制 Ultra fast</h2>
+          <form id="ultrafast-form">
+            <label class="setting">生效范围
+              <select id="ultrafast-mode">
+                <option value="off">关闭 · 保持请求服务档</option>
+                <option value="all">全部 BPS 账号</option>
+                <option value="selected">仅选定 BPS 账号</option>
+              </select>
+              <small>开启后将所选账号的新请求覆盖为 service_tier=ultrafast，不改变推理强度。高级 payload 规则仍优先；上游不支持时返回错误，不自动降档。</small>
+            </label>
+            <div id="ultrafast-selection" class="setting" hidden>
+              <span class="label">选择 BPS 账号</span>
+              <div id="ultrafast-accounts"></div>
+              <small id="accounts-status" role="status"></small>
+            </div>
+            <p class="notice">此选项不保证上游授权或响应速度；请确认账号支持该档位及相应费用。未知 Ultra fast 价格不会被当作普通档估算。</p>
+            <footer><button class="primary">保存 Ultra fast 设置</button></footer>
+          </form>
+        </section>
+        <section class="card">
           <h2>请求设置</h2>
           <form id="general">
             <div class="setting">
@@ -309,7 +350,12 @@
       const configPath = new URL("../../../../v8/management/config/plugins/configs/bps", location.href);
       const ratesKey = "quota-model-prices",
         cacheKey = "cache-creation-as-input",
-        originKey = "image-relay-origin";
+        originKey = "image-relay-origin",
+        ultraKey = "force-ultrafast",
+        ultraIDsKey = "force-ultrafast-auth-ids",
+        cooldownEnabledKey = "rate-limit-cooldown-enabled",
+        cooldownThresholdKey = "rate-limit-cooldown-threshold",
+        cooldownSecondsKey = "rate-limit-cooldown-seconds";
       const rates = [
         ["input", "输入"],
         ["output", "输出"],
@@ -319,6 +365,7 @@
       const multipliers = [
         ["priority-multiplier", "Priority 倍率"],
         ["flex-multiplier", "Flex 倍率"],
+        ["ultrafast-multiplier", "Ultra fast 倍率（按实际单价填写）"],
         ["long-context-threshold", "长上下文阈值（Token）"],
         ["long-context-input-multiplier", "长上下文输入倍率"],
         ["long-context-output-multiplier", "长上下文输出倍率"],
@@ -327,7 +374,9 @@
         etag = "",
         prices = {},
         editing = null,
-        busy = false;
+        busy = false,
+        credentials = [],
+        selectedAuthIDs = new Set();
 
       function notice(message, error = false) {
         for (const id of ["status", "price-status"]) {
@@ -434,40 +483,86 @@
       }
       async function load() {
         const cfg = await request("GET", "");
+        el("cooldown-enabled").checked = cfg[cooldownEnabledKey] === true;
+        el("cooldown-threshold").value = cfg[cooldownThresholdKey] ?? 3;
+        el("cooldown-seconds").value = cfg[cooldownSecondsKey] ?? 60;
         el("cache").checked = cfg[cacheKey] === true;
         el("origin").value = cfg[originKey] || "";
         prices = cfg[ratesKey] || {};
+        selectedAuthIDs = new Set(cfg[ultraIDsKey] || []);
+        el("ultrafast-mode").value = cfg[ultraKey] === true ? "all" : selectedAuthIDs.size ? "selected" : "off";
+        renderAccounts();
+        toggleUltraSelection();
         listPrices();
         el("login").hidden = true;
         el("settings").hidden = el("reload").hidden = false;
         notice("");
+        try {
+          const result = await readManagement("credentials");
+          credentials = (result.files || []).filter((item) => item.provider === "bps");
+          el("accounts-status").textContent = credentials.length ? "" : "暂无 BPS 账号，请先导入凭据。";
+          renderAccounts();
+        } catch {
+          credentials = [];
+          renderAccounts();
+          el("accounts-status").textContent = "凭据列表读取失败，已保留保存的账号选择。请重新读取后选择新账号。";
+        }
         await loadModelSuggestions();
+      }
+      async function readManagement(path) {
+        const url = new URL("../../../../v8/management/" + path, location.href);
+        const response = await fetch(url, {
+          headers: { Authorization: "Bearer " + key },
+          mode: "same-origin",
+          redirect: "error",
+          cache: "no-store",
+        });
+        if (!response.ok) throw Error("目录读取失败（HTTP " + response.status + "）。");
+        return response.json();
+      }
+      function toggleUltraSelection() {
+        el("ultrafast-selection").hidden = el("ultrafast-mode").value !== "selected";
+      }
+      function renderAccounts() {
+        const list = el("ultrafast-accounts");
+        list.replaceChildren();
+        const accounts = new Map();
+        for (const item of credentials) {
+          const id = item.id || item.name;
+          if (typeof id !== "string" || !id) continue;
+          const selectedID = selectedAuthIDs.has(item.name) ? item.name : id;
+          accounts.set(selectedID, (item.name || id) + (item.disabled ? "（已停用）" : ""));
+        }
+        for (const id of selectedAuthIDs) if (!accounts.has(id)) accounts.set(id, id + "（当前列表未找到，保留选择）");
+        for (const [id, caption] of [...accounts].sort(([a], [b]) => a.localeCompare(b))) {
+          const label = document.createElement("label");
+          label.className = "toggle account";
+          const input = document.createElement("input");
+          input.type = "checkbox";
+          input.value = id;
+          input.checked = selectedAuthIDs.has(id);
+          input.onchange = () => input.checked ? selectedAuthIDs.add(id) : selectedAuthIDs.delete(id);
+          const text = document.createElement("span");
+          text.textContent = caption;
+          label.append(input, text);
+          list.append(label);
+        }
       }
       async function loadModelSuggestions() {
         const ids = new Set(Object.keys(prices));
-        const read = async (path) => {
-          const url = new URL("../../../../v8/management/" + path, location.href);
-          const response = await fetch(url, {
-            headers: { Authorization: "Bearer " + key },
-            mode: "same-origin",
-            redirect: "error",
-            cache: "no-store",
-          });
-          if (!response.ok) throw Error("模型目录读取失败（HTTP " + response.status + "）。");
-          return response.json();
-        };
-        try {
-          const credentials = await read("credentials");
-          for (const credential of credentials.files || []) {
-            if (credential.provider !== "bps" || credential.disabled) continue;
-            const catalog = await read("credentials/models?name=" + encodeURIComponent(credential.name));
-            for (const model of catalog.models || []) {
+        const active = credentials.filter((item) => !item.disabled);
+        let failed = false;
+        for (let i = 0; i < active.length; i += 4) {
+          const catalogs = await Promise.allSettled(active.slice(i, i + 4).map((item) =>
+            readManagement("credentials/models?name=" + encodeURIComponent(item.name))));
+          for (const result of catalogs) {
+            if (result.status !== "fulfilled") { failed = true; continue; }
+            for (const model of result.value.models || []) {
               if (typeof model.id === "string" && model.id) ids.add(model.id);
             }
           }
-        } catch {
-          notice("模型建议暂不可用，仍可手动输入模型 ID。", true);
         }
+        if (failed) notice("部分模型建议暂不可用，仍可手动输入模型 ID。", true);
         el("models").replaceChildren(
           ...[...ids].sort().map((id) => {
             const option = document.createElement("option");
@@ -536,6 +631,30 @@
         const next = { ...prices };
         delete next[editing];
         run(() => savePrices(next));
+      };
+      el("ultrafast-mode").onchange = toggleUltraSelection;
+      el("ultrafast-form").onsubmit = (event) => {
+        event.preventDefault();
+        const mode = el("ultrafast-mode").value;
+        const ids = mode === "off" ? [] : [...selectedAuthIDs].sort();
+        if (mode === "selected" && !ids.length) return notice("请至少选择一个 BPS 账号。", true);
+        run(async () => {
+          await request("PATCH", "", { [ultraKey]: mode === "all", [ultraIDsKey]: ids });
+          selectedAuthIDs = new Set(ids);
+          renderAccounts();
+          notice("Ultra fast 设置已保存，仅对新请求生效。");
+        });
+      };
+      el("cooldown-form").onsubmit = (event) => {
+        event.preventDefault();
+        run(async () => {
+          await request("PATCH", "", {
+            [cooldownEnabledKey]: el("cooldown-enabled").checked,
+            [cooldownThresholdKey]: el("cooldown-threshold").valueAsNumber,
+            [cooldownSecondsKey]: el("cooldown-seconds").valueAsNumber,
+          });
+          notice("账号冷却设置已保存。");
+        });
       };
       el("general").onsubmit = (event) => {
         event.preventDefault();

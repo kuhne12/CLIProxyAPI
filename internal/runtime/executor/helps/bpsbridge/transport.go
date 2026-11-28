@@ -173,6 +173,9 @@ func EventError(data []byte) error {
 		failure.Message = "Encrypted conversation content could not be validated; start a new delegation with valid history"
 	case "rate_limit_exceeded", "too_many_requests", "concurrent_request_limit":
 		failure.Code = pluginabi.ErrorCodeTransientRateLimit
+		if code == "rate_limit_exceeded" {
+			failure.Code = pluginabi.ErrorCodeBPSRateLimit
+		}
 		failure.HTTPStatus = 429
 		failure.RetryAfterSeconds = 1
 		failure.Message = "Service is temporarily rate limited; retry later"

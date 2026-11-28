@@ -18,12 +18,14 @@ import (
 	"github.com/MoeForge/moego/regexp"
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/codex"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/bpsconfig"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/clienterror"
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	internallogging "github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 )
 
 var quotaCooldownDisabled atomic.Bool
@@ -174,10 +176,41 @@ func (m *Manager) setConfigSnapshotLocked(cfg *internalconfig.Config) bool {
 	if homeSessionAliasTTL(previousCfg) != homeSessionAliasTTL(cfg) {
 		m.homeSessionAliases.clear()
 	}
+	var bpsPolicy bpsconfig.RateLimitCooldown
+	if plugin, exists := cfg.Plugins.Configs["bps"]; exists && plugin.Raw.Kind != 0 {
+		if errDecode := plugin.Raw.Decode(&bpsPolicy); errDecode != nil {
+			bpsPolicy = bpsconfig.RateLimitCooldown{}
+		}
+	}
 	m.runtimeConfig.Store(cfg)
 	m.mu.Lock()
+	var clearedBPS []*Auth
+	if bpsPolicy != m.bpsRateLimitPolicy {
+		for _, auth := range m.auths {
+			auth.bpsRateLimit.consecutive = 0
+			if !bpsPolicy.Enabled && !auth.bpsRateLimit.until.IsZero() {
+				auth.bpsRateLimit.until = time.Time{}
+				auth.Generation++
+				clearedBPS = append(clearedBPS, auth.Clone())
+			}
+		}
+		m.bpsRateLimitPolicy = bpsPolicy
+	}
 	m.generations.notifyLocked()
 	m.mu.Unlock()
+	for _, auth := range clearedBPS {
+		if m.scheduler != nil {
+			m.scheduler.upsertAuthResult(auth, nil, true)
+		}
+		models, epoch := registry.GetGlobalRegistry().GetModelsAndEpochForClient(auth.ID)
+		projections := make([]registry.ClientModelProjection, 0, len(models))
+		for _, model := range models {
+			if model != nil {
+				projections = append(projections, m.clientModelProjectionForAuth(auth, model.ID, time.Now()))
+			}
+		}
+		registry.GetGlobalRegistry().ApplyClientModelProjections(auth.ID, epoch, auth.Generation, projections)
+	}
 	clearedCooldowns := m.clearDisabledCooldownStates(cfg)
 	if clearedCooldowns && oldCooldownStore != nil {
 		m.mu.Lock()
@@ -1662,6 +1695,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 
 	var authSnapshot *Auth
 	cooldownStateChanged := false
+	bpsCooldownArmed := false
 	scheduleUnauthorizedRefresh := false
 	now := time.Now()
 	// A 401 condemns the access token, except one a -and-cooldown rule matched: that only cools the credential.
@@ -1707,6 +1741,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 			}
 		}
 		modelState := existingModelState(auth, modelKey)
+		bpsCooldownArmed = m.recordBPSRateLimitLocked(auth, result, now)
 		auth.recordRecentRequest(now, result.Success)
 		if result.Success {
 			auth.Success++
@@ -2389,7 +2424,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 	m.mu.Unlock()
 	releaseMutation()
 	if m.scheduler != nil && authSnapshot != nil {
-		credentialScopedResult := result.CredentialScope || scheduleUnauthorizedRefresh
+		credentialScopedResult := result.CredentialScope || scheduleUnauthorizedRefresh || bpsCooldownArmed
 		var targetModels []string
 		if !credentialScopedResult && modelKey != "" {
 			targetModels = append(targetModels, modelKey)
@@ -3276,7 +3311,7 @@ func resultErrorFromError(err error) *Error {
 		// normalize conflicting model-only or cooldown-skipping codes so MarkResult
 		// cannot downgrade whole-credential exhaustion.
 		switch strings.ToLower(strings.TrimSpace(resultErr.Code)) {
-		case transientRateLimitErrorCode,
+		case pluginabi.ErrorCodeBPSRateLimit, transientRateLimitErrorCode,
 			requestScopedErrorCode,
 			streamTruncatedErrorCode,
 			connectionLifecycleErrorCode,
@@ -3291,7 +3326,9 @@ func resultErrorFromError(err error) *Error {
 		// Preserve the transient capacity classification alongside the public
 		// 429 status so MarkResult cools only the reporting model until the
 		// provider retry hint instead of recording quota exhaustion.
-		resultErr.Code = transientRateLimitErrorCode
+		if resultErr.Code != pluginabi.ErrorCodeBPSRateLimit {
+			resultErr.Code = transientRateLimitErrorCode
+		}
 	case isExplicitModelNotFoundError(err, ""):
 		if resultErr.Code == "" || resultErr.Code == requestScopedErrorCode {
 			resultErr.Code = "model_not_found"
@@ -3324,8 +3361,13 @@ func resultErrorFromError(err error) *Error {
 // Connection lifecycle is intentionally separate from request_scoped so transport
 // drops do not also stop credential rotation via isRequestInvalidError.
 func shouldSkipCredentialCooldown(err *Error) bool {
-	if err != nil && err.Code == ErrorCodeForceCooldown {
-		return false
+	if err != nil {
+		if err.Code == ErrorCodeForceCooldown {
+			return false
+		}
+		if err.Code == bpsAccountCoolingCode {
+			return true
+		}
 	}
 	return isRequestScopedResultError(err) || isConnectionLifecycleResultError(err) || isTransientTransportResultError(err) || isStreamTruncatedResultError(err)
 }
@@ -3830,7 +3872,7 @@ func isTransientRateLimitError(err error) bool {
 }
 
 func isTransientRateLimitResultError(err *Error) bool {
-	return err != nil && err.Code == transientRateLimitErrorCode
+	return err != nil && (err.Code == transientRateLimitErrorCode || err.Code == pluginabi.ErrorCodeBPSRateLimit)
 }
 
 func isCredentialScopedError(err error) bool {
